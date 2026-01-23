@@ -1,0 +1,47 @@
+# Bloviate Configuration
+
+# Audio Settings
+audio:
+  sample_rate: 16000
+  chunk_size: 1024
+  channels: 1
+  device_name: "Scarlett"  # Will auto-detect Scarlett devices
+
+# Push-to-Talk Settings
+ptt:
+  hotkey: "<cmd>+<option>"
+
+# Window Management Settings
+window_management:
+  enabled: true
+  hotkey_prefix: "<ctrl>+<cmd>"  # Base hotkey, combine with arrow keys
+
+# Voice Fingerprinting
+voice_fingerprint:
+  enabled: true
+  threshold: 0.65  # 0-1, higher = stricter matching
+  embedding_model: "speechbrain/spkrec-ecapa-voxceleb"
+  min_enrollment_samples: 5
+
+# Noise Suppression
+noise_suppression:
+  enabled: true
+  stationary_noise_reduction: 0.8  # 0-1
+  vad_aggressiveness: 3  # 0-3, higher = more aggressive
+  spectral_gate_threshold: 0.03
+
+# Transcription
+transcription:
+  model: "medium.en"  # tiny.en, base.en, small.en, medium.en
+  language: "en"
+  output_format: "clipboard"  # clipboard, stdout, both
+  auto_paste: true  # Automatically paste after copying to clipboard
+  use_custom_dictionary: true  # Apply custom dictionary corrections
+
+# UI
+ui:
+  show_waveform: true
+  show_metrics: true
+  window_size: [400, 200]
+  theme: "dark"
+  show_menubar_indicator: true  # Show status in macOS menu bar

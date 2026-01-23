@@ -1,0 +1,70 @@
+# Custom Dictionary for Bloviate
+# Add phrases that are commonly misheard by the transcription engine
+#
+# Format:
+#   - phrase: "the correct text you want"
+#     variations: ["how it might be transcribed", "another variation"]
+#
+# Example:
+#   - phrase: "git checkout -b"
+#     variations: ["get check out dash b", "git check out dash b", "get checkout dash b"]
+
+entries:
+  # Git commands
+  - phrase: "git checkout -b"
+    variations:
+      - "get check out dash b"
+      - "git check out dash b"
+      - "get checkout dash b"
+      - "get check out -b"
+      - "git check out -b"
+
+  - phrase: "git checkout"
+    variations:
+      - "get check out"
+      - "get checkout"
+
+  - phrase: "git commit"
+    variations:
+      - "get commit"
+      - "get committed"
+
+  - phrase: "git push"
+    variations:
+      - "get push"
+      - "get pushed"
+
+  - phrase: "git pull"
+    variations:
+      - "get pull"
+
+  - phrase: "git status"
+    variations:
+      - "get status"
+
+  - phrase: "npm install"
+    variations:
+      - "NPM install"
+      - "n p m install"
+
+  - phrase: "feat-"
+    variations:
+      - "feed-"
+      - "feat dash"
+      - "feed dash"
+
+  - phrase: "fix-"
+    variations:
+      - "fixed-"
+      - "fix dash"
+      - "fixed dash"
+
+  - phrase: "next deck"
+    variations:
+      - "tech stack"
+    
+
+  
+  
+
+  # Add your own custom phrases below

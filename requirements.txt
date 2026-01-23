@@ -1,0 +1,12 @@
+numpy>=1.24.0
+sounddevice>=0.4.6
+scipy>=1.10.0
+pynput>=1.7.6
+torch>=2.0.0,<2.5.0
+torchaudio>=2.0.0,<2.5.0
+speechbrain==1.0.0
+noisereduce>=3.0.0
+pyqt6>=6.5.0
+openai-whisper>=20231117
+pyyaml>=6.0
+webrtcvad>=2.0.10
