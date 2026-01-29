@@ -67,4 +67,603 @@ entries:
   
   
 
+
+
+  # Dev tools and commands
+  - phrase: "git rebase"
+    variations:
+      - "get rebase"
+      - "git rebace"
+
+  - phrase: "git merge"
+    variations:
+      - "get merge"
+
+  - phrase: "git stash"
+    variations:
+      - "get stash"
+      - "get stashed"
+
+  - phrase: "git cherry-pick"
+    variations:
+      - "get cherry pick"
+      - "git cherry pick"
+      - "get cherry-pick"
+
+  - phrase: "git reset"
+    variations:
+      - "get reset"
+
+  - phrase: "git revert"
+    variations:
+      - "get revert"
+
+  - phrase: "git diff"
+    variations:
+      - "get diff"
+
+  - phrase: "npm run"
+    variations:
+      - "NPM run"
+      - "n p m run"
+
+  - phrase: "pnpm install"
+    variations:
+      - "p n p m install"
+      - "p npm install"
+      - "pn pm install"
+
+  - phrase: "pnpm run"
+    variations:
+      - "p n p m run"
+      - "p npm run"
+      - "pn pm run"
+
+  # Products, services, and platforms
+  - phrase: "Volley"
+    variations:
+      - "volley"
+      - "volly"
+
+  - phrase: "Volley-Inc"
+    variations:
+      - "volley inc"
+      - "volley ink"
+      - "volley-inc"
+
+  - phrase: "Coval"
+    variations:
+      - "coval"
+      - "co val"
+      - "co-val"
+      - "koval"
+
+  - phrase: "Chime"
+    variations:
+      - "chime"
+      - "chyme"
+
+  - phrase: "Comet"
+    variations:
+      - "comet"
+      - "co met"
+
+  - phrase: "Hippocratic AI"
+    variations:
+      - "hippocratic ai"
+      - "hippo cratic ai"
+      - "hippocratic a i"
+
+  - phrase: "OpenAI"
+    variations:
+      - "open ai"
+      - "open a i"
+      - "open ay i"
+
+  - phrase: "LiveKit"
+    variations:
+      - "live kit"
+      - "livekit"
+
+  - phrase: "Pipecat"
+    variations:
+      - "pipe cat"
+      - "pipekat"
+      - "pipecat"
+
+  - phrase: "Vapi"
+    variations:
+      - "vapi"
+      - "va pi"
+      - "v a p i"
+
+  - phrase: "Datadog"
+    variations:
+      - "data dog"
+      - "data dogg"
+      - "data dogs"
+
+  - phrase: "Sentry"
+    variations:
+      - "sentry"
+      - "sent tree"
+
+  - phrase: "Amplitude"
+    variations:
+      - "ample tude"
+      - "amplitude"
+
+  - phrase: "Appsflyer"
+    variations:
+      - "AppsFlyer"
+      - "apps flyer"
+      - "app flyer"
+      - "appsflyer"
+
+  - phrase: "Supabase"
+    variations:
+      - "super base"
+      - "supa base"
+      - "soup a base"
+
+  - phrase: "GitHub"
+    variations:
+      - "git hub"
+      - "get hub"
+      - "github"
+
+  - phrase: "Linear"
+    variations:
+      - "linear"
+      - "line ear"
+
+  - phrase: "Notion"
+    variations:
+      - "notion"
+      - "notian"
+
+  - phrase: "Figma"
+    variations:
+      - "figma"
+      - "fig ma"
+
+  - phrase: "Vercel"
+    variations:
+      - "vercel"
+      - "ver sell"
+      - "ver cell"
+
+  - phrase: "Obsidian"
+    variations:
+      - "obsidian"
+      - "ob city and"
+      - "ob city in"
+
+  - phrase: "Strava"
+    variations:
+      - "strava"
+      - "stravah"
+
+  - phrase: "Jeopardy"
+    variations:
+      - "jeopardy"
+      - "jeapardy"
+      - "jeapordy"
+      - "jeopordy"
+
+  - phrase: "Jeopardy CMS"
+    variations:
+      - "jeopardy cms"
+      - "jeopardy c m s"
+      - "jeopardy see ems"
+
+  - phrase: "FireTV"
+    variations:
+      - "fire tv"
+      - "Fire TV"
+      - "fire tee vee"
+      - "fire t v"
+
+  - phrase: "Roku"
+    variations:
+      - "roku"
+      - "row coup"
+      - "rock you"
+
+  - phrase: "Roku Hub"
+    variations:
+      - "roku hub"
+      - "row coup hub"
+      - "rock you hub"
+
+  - phrase: "Android TV"
+    variations:
+      - "android tv"
+      - "android tee vee"
+      - "android t v"
+
+  - phrase: "Alexa"
+    variations:
+      - "alexa"
+      - "a lex a"
+
+  - phrase: "LG"
+    variations:
+      - "l g"
+      - "el gee"
+
+  - phrase: "Samsung"
+    variations:
+      - "sam sung"
+      - "samsung"
+
+  - phrase: "Fire TV Stick"
+    variations:
+      - "fire tv stick"
+      - "fire tee vee stick"
+      - "fire t v stick"
+
+  # Acronyms and internal terms
+  - phrase: "QOTD"
+    variations:
+      - "q o t d"
+      - "quote d"
+      - "Q O T D"
+
+  - phrase: "TPIR"
+    variations:
+      - "t p i r"
+      - "tee pee eye are"
+      - "the price is right"
+
+  - phrase: "SF"
+    match: "whole_word"
+    variations:
+      - "s f"
+      - "ess eff"
+
+  - phrase: "PR"
+    match: "whole_word"
+    variations:
+      - "p r"
+      - "pee are"
+      - "pr"
+
+  - phrase: "PRs"
+    match: "whole_word"
+    variations:
+      - "p r's"
+      - "p r s"
+      - "pee are's"
+
+
+  - phrase: "API"
+    variations:
+      - "a p i"
+      - "A P I"
+      - "api"
+
+  - phrase: "SDK"
+    variations:
+      - "s d k"
+      - "S D K"
+
+  - phrase: "QA"
+    variations:
+      - "q a"
+      - "cue a"
+
+  - phrase: "TDD"
+    variations:
+      - "t d d"
+      - "tee dee dee"
+
+  - phrase: "RCA"
+    variations:
+      - "r c a"
+      - "are see a"
+
+  - phrase: "CI/CD"
+    variations:
+      - "c i slash c d"
+      - "ci cd"
+      - "c i c d"
+      - "cicd"
+
+  - phrase: "AWS"
+    variations:
+      - "a w s"
+      - "A W S"
+
+  - phrase: "S3"
+    variations:
+      - "s three"
+      - "ess three"
+      - "s 3"
+
+  - phrase: "PST"
+    variations:
+      - "p s t"
+      - "P S T"
+
+  - phrase: "WFH"
+    variations:
+      - "w f h"
+      - "double u f h"
+      - "work from home"
+
+  - phrase: "OAuth"
+    variations:
+      - "o auth"
+      - "oh auth"
+      - "oauth"
+
+
+  - phrase: "FTUE"
+    variations:
+      - "f t u e"
+      - "eff t u e"
+
+  - phrase: "UI"
+    variations:
+      - "u i"
+      - "you eye"
+
+  - phrase: "URL"
+    variations:
+      - "u r l"
+      - "you are l"
+
+  - phrase: "k8s"
+    variations:
+      - "k eight s"
+      - "k eights"
+      - "kates"
+      - "k 8 s"
+
+  - phrase: "CMS"
+    variations:
+      - "c m s"
+      - "see ems"
+      - "cms"
+
+  - phrase: "AI"
+    variations:
+      - "a i"
+      - "A I"
+
+  # People and places
+  - phrase: "Dana Dzik"
+    variations:
+      - "Dana Zik"
+      - "Dana Zeke"
+      - "Donna Zeke"
+
+  - phrase: "Kevin Shen"
+    variations:
+      - "Kevin Chen"
+      - "Kevin Shin"
+
+  - phrase: "Matthew Ha"
+    variations:
+      - "Mathew Ha"
+      - "Matthew Hah"
+      - "Matt Ha"
+
+  - phrase: "Laura Cheney"
+    variations:
+      - "Laura Chaney"
+      - "Lora Chaney"
+
+  - phrase: "John Chung"
+    variations:
+      - "John Chong"
+      - "John Cheung"
+
+  - phrase: "Sonia Sachar"
+    variations:
+      - "Sonya Sachar"
+      - "Sonia Sacher"
+
+  - phrase: "Cole Amick"
+    variations:
+      - "Cole Amic"
+      - "Cole Emick"
+
+  - phrase: "Danny Johnson"
+    variations:
+      - "Danny Johnston"
+      - "Dani Johnson"
+
+  - phrase: "Isaiah Lewis"
+    variations:
+      - "Isaiah Louis"
+      - "Isiah Lewis"
+
+  - phrase: "Jake Levi"
+    variations:
+      - "Jake Levy"
+      - "Jake Levee"
+
+  - phrase: "Jenny Chou"
+    variations:
+      - "Jenny Cho"
+      - "Jenny Zhou"
+
+  - phrase: "Peter Yi"
+    variations:
+      - "Peter Yee"
+      - "Peter Yie"
+
+  - phrase: "Brian Ng"
+    variations:
+      - "Brian Eng"
+      - "Brian Ing"
+
+  - phrase: "Christopher Dobson"
+    variations:
+      - "Chris Dobson"
+      - "Christopher Dobsen"
+
+  - phrase: "Jonathan Winters"
+    variations:
+      - "Jonathon Winters"
+      - "Jonathan Winter"
+
+  - phrase: "Jane Kim"
+    variations:
+      - "Jayne Kim"
+      - "Jane Kym"
+
+  - phrase: "Chris Tsai"
+    variations:
+      - "Chris Sai"
+      - "Chris Tsay"
+
+  - phrase: "Ben Dyer"
+    variations:
+      - "Ben Dyre"
+      - "Ben Dier"
+
+  - phrase: "Brandon Spitzack"
+    variations:
+      - "Brandon Spitzak"
+
+  - phrase: "Lior Sabag"
+    variations:
+      - "Lior Sabagh"
+      - "Lior Sabak"
+
+  - phrase: "Yoav Hortman"
+    variations:
+      - "Yoav Hartman"
+      - "Yoav Hortmann"
+
+  - phrase: "Moe Fayez"
+    variations:
+      - "Mo Fayez"
+      - "Moe Faiz"
+
+  - phrase: "Shriya Bhargava"
+    variations:
+      - "Shreya Bhargava"
+      - "Shriya Bargava"
+
+  - phrase: "Muizz Matemilola"
+    variations:
+      - "Muiz Matemilola"
+      - "Muiz Matamilola"
+
+  - phrase: "Adell Hanson-Kahn"
+    variations:
+      - "Adele Hanson Kahn"
+      - "Adell Hanson Kahn"
+
+  - phrase: "Kevin Khandjian"
+    variations:
+      - "Kevin Khanjian"
+      - "Kevin Kandjian"
+
+  - phrase: "Matt Sokolowsky"
+    variations:
+      - "Matt Sokolowski"
+      - "Matt Sokolosky"
+
+  - phrase: "Matt Riese"
+    variations:
+      - "Matt Reese"
+      - "Matt Reece"
+
+  - phrase: "River Pagianni"
+    variations:
+      - "River Pagiani"
+      - "River Pagani"
+
+  - phrase: "Riyadh Drebika"
+    variations:
+      - "Riyad Drebika"
+      - "Riyadh Drebicka"
+
+  - phrase: "Tyler Aratani"
+    variations:
+      - "Tyler Aratany"
+
+  - phrase: "James Wilsterman"
+    variations:
+      - "James Wilstermann"
+
+  - phrase: "Aron Vietti"
+    variations:
+      - "Aaron Vietti"
+      - "Aaron Vieti"
+
+  - phrase: "Kobi Hudson"
+    variations:
+      - "Kobe Hudson"
+      - "Kobi Hutson"
+
+  - phrase: "Shrey Satpathy"
+    variations:
+      - "Shrey Satpathi"
+
+  - phrase: "Beena Agarwal"
+    variations:
+      - "Bina Agarwal"
+
+  - phrase: "Paper Lee"
+    variations:
+      - "Piper Lee"
+      - "Paper Li"
+
+  - phrase: "Sausalito"
+    variations:
+      - "salsa lito"
+      - "sauce a lito"
+      - "saw salito"
+
+  - phrase: "Sausalito Cafe"
+    variations:
+      - "Sausalito cafe"
+      - "salsa lito cafe"
+
+  - phrase: "San Francisco"
+    variations:
+      - "san francisco"
+      - "san fransisco"
+      - "san fran"
+
+  - phrase: "Oakland"
+    variations:
+      - "oak land"
+
+  - phrase: "Mt. Tamalpais"
+    variations:
+      - "mount tamalpais"
+      - "mt tamalpais"
+      - "mount tam"
+
+  - phrase: "Rodeo Beach"
+    variations:
+      - "rodeo beach"
+
+  - phrase: "Hawk Hill"
+    variations:
+      - "hawk hill"
+
+  - phrase: "Golden Gate Bridge"
+    variations:
+      - "golden gate bridge"
+
+  - phrase: "Brooklyn Bridge"
+    variations:
+      - "brooklyn bridge"
+
+  - phrase: "Williamsburg Bridge"
+    variations:
+      - "williamsburg bridge"
+
+  - phrase: "Central Park"
+    variations:
+      - "central park"
+
   # Add your own custom phrases below

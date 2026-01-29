@@ -51,6 +51,14 @@ The transcribed text will be:
 - Copied to your clipboard (ready to paste)
 - Displayed in the UI window
 
+### Window Management (Voice Commands)
+
+1. Press and hold `Ctrl+Cmd`
+2. Say "left", "right", "top", or "bottom"
+3. Release the hotkey to resize the focused window
+
+The `Ctrl+Cmd+Arrow` shortcuts still work for instant resizing.
+
 ### Workflow Tips
 
 1. **Keep the UI window visible** so you can see if your voice is being detected
@@ -69,6 +77,14 @@ ptt:
   # Other options:
   # "<ctrl>+<shift>+<space>"
   # "<cmd>+<shift>+<space>"
+```
+
+### Window Management Hotkeys
+```yaml
+window_management:
+  enabled: true
+  hotkey_prefix: "<ctrl>+<cmd>"  # Base hotkey, combine with arrow keys
+  command_hotkey: "<ctrl>+<cmd>"  # Hold to speak window commands
 ```
 
 ### Adjust Voice Matching Sensitivity
@@ -97,6 +113,30 @@ transcription:
 - `base.en` - Good balance (recommended)
 - `small.en` - More accurate, slower
 - `medium.en` - Most accurate, slowest
+
+### Use Deepgram for Low-Latency Dictation
+Set your API key in the environment and switch the provider in `config.yaml`.
+
+```bash
+export DEEPGRAM_API_KEY="your_key_here"
+```
+
+```yaml
+transcription:
+  provider: "deepgram"
+
+deepgram:
+  streaming: true
+  model: "flux-general-en"  # Fastest; try "nova-3" for higher accuracy
+  endpointing: 300  # Lower = faster finalization
+  eot_timeout_ms: 800  # v2 Flux end-of-transcript timeout
+  smart_format: false  # Disable to reduce delay
+  no_delay: true
+```
+
+Notes:
+- Streaming sends audio while you hold PTT, so release-to-text is much faster.
+- If you see errors about the model name, switch to a Deepgram model available on your account.
 
 ### Adjust Noise Suppression
 ```yaml

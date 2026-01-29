@@ -15,6 +15,7 @@ ptt:
 window_management:
   enabled: true
   hotkey_prefix: "<ctrl>+<cmd>"  # Base hotkey, combine with arrow keys
+  command_hotkey: "<ctrl>+<cmd>"  # Hold to speak window commands
 
 # Voice Fingerprinting
 voice_fingerprint:
@@ -32,11 +33,32 @@ noise_suppression:
 
 # Transcription
 transcription:
-  model: "medium.en"  # tiny.en, base.en, small.en, medium.en
+  provider: "deepgram"  # whisper, deepgram
+  model: "medium.en"  # Whisper only: tiny.en, base.en, small.en, medium.en
   language: "en"
   output_format: "clipboard"  # clipboard, stdout, both
   auto_paste: true  # Automatically paste after copying to clipboard
   use_custom_dictionary: true  # Apply custom dictionary corrections
+
+# Deepgram (live streaming)
+deepgram:
+  streaming: true
+  model: "flux-general-en"  # Fastest. Try "nova-3" for higher accuracy if available.
+  api_version: "v2"  # Flux requires v2; remove or set v1 for older models.
+  prerecorded_model: "nova-3"  # Fallback model for non-streaming transcription.
+  prerecorded_api_version: "v1"
+  punctuate: true
+  smart_format: false
+  interim_results: true
+  endpointing: 300  # ms of silence before finalizing
+  eot_timeout_ms: 800  # v2 end-of-transcript timeout; uses endpointing if unset.
+  no_delay: true
+  api_key_env: "DEEPGRAM_API_KEY"
+  finalize_wait_s: 0.6
+  connect_timeout_s: 2.0
+  prerecorded_timeout_s: 30
+  prebuffer_chunks: 12  # ~12 * 64ms = 0.75s of pre-roll
+  extra_query_params: {}
 
 # UI
 ui:
@@ -44,4 +66,5 @@ ui:
   show_metrics: true
   window_size: [400, 200]
   theme: "dark"
+  interim_update_interval_s: 0.15
   show_menubar_indicator: true  # Show status in macOS menu bar

@@ -3,6 +3,7 @@ Voice fingerprinting module for Bloviate.
 Uses speaker embeddings to verify that audio matches the enrolled user's voice.
 """
 
+import inspect
 import numpy as np
 import torch
 import torchaudio
@@ -10,7 +11,51 @@ import torchaudio
 # Apply compatibility patch for newer torchaudio versions
 import torchaudio_patch
 
-from speechbrain.pretrained import EncoderClassifier
+
+def _patch_huggingface_hub():
+    """
+    SpeechBrain 1.0 expects hf_hub_download(use_auth_token=...).
+    Newer huggingface_hub removed that arg in favor of token=...
+    Patch before importing SpeechBrain so its modules pick up the wrapper.
+    """
+    try:
+        import huggingface_hub
+        from huggingface_hub import hf_hub_download as _hf_hub_download
+
+        sig = inspect.signature(_hf_hub_download)
+        supports_token = "token" in sig.parameters
+        supports_use_auth_token = "use_auth_token" in sig.parameters
+
+        def _wrapped_hf_hub_download(*args, use_auth_token=None, token=None, **kwargs):
+            if token is None and use_auth_token is not None:
+                token = use_auth_token
+            try:
+                if supports_token:
+                    return _hf_hub_download(*args, token=token, **kwargs)
+                if supports_use_auth_token:
+                    return _hf_hub_download(*args, use_auth_token=use_auth_token, **kwargs)
+                return _hf_hub_download(*args, **kwargs)
+            except Exception as exc:
+                filename = kwargs.get("filename")
+                msg = str(exc)
+                if filename == "custom.py" and ("404" in msg or "Entry Not Found" in msg):
+                    raise ValueError("File not found on HF hub") from exc
+                raise
+
+        huggingface_hub.hf_hub_download = _wrapped_hf_hub_download
+    except Exception:
+        pass
+
+
+_patch_huggingface_hub()
+
+try:
+    from speechbrain.inference import EncoderClassifier
+except Exception:
+    try:
+        from speechbrain.pretrained import EncoderClassifier
+    except Exception:
+        EncoderClassifier = None
 from typing import Optional, List
 import os
 import pickle
@@ -39,6 +84,8 @@ class VoiceFingerprint:
         # Load speaker embedding model
         print("Loading speaker embedding model...")
         try:
+            if EncoderClassifier is None:
+                raise RuntimeError("SpeechBrain EncoderClassifier unavailable")
             self.encoder = EncoderClassifier.from_hparams(
                 source=self.model_name,
                 savedir=str(self.model_dir / "pretrained")

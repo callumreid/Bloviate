@@ -10,8 +10,10 @@ import yaml
 import sys
 import threading
 import time
+import re
 import numpy as np
 from pathlib import Path
+from typing import Optional
 
 from audio_capture import AudioCapture
 from noise_suppressor import NoiseSuppressor
@@ -45,8 +47,15 @@ class Bloviate:
         # State
         self.is_recording = False
         self.recorded_audio = []
+        self.is_command_recording = False
+        self.recorded_command_audio = []
         self.ui_window = None
         self.ui_app = None
+        self._last_interim_text = ""
+        self._last_interim_update = 0.0
+        self._interim_update_interval_s = float(
+            self.config.get("ui", {}).get("interim_update_interval_s", 0.15)
+        )
 
     def enroll_voice(self):
         """Run voice enrollment process."""
@@ -118,6 +127,11 @@ class Bloviate:
         self.is_recording = True
         self.recorded_audio = []
         self.audio_capture.clear_queue()
+        self._last_interim_text = ""
+        self._last_interim_update = 0.0
+
+        if self.transcriber.supports_streaming():
+            self.transcriber.start_stream("dictation")
 
     def on_ptt_release(self):
         """Called when PTT is released."""
@@ -133,9 +147,114 @@ class Bloviate:
         if len(self.recorded_audio) > 0:
             self.process_recording()
         else:
+            if self.transcriber.supports_streaming():
+                self.transcriber.finish_stream("dictation")
             print("No audio recorded")
             if self.ui_window:
                 self.ui_window.signals.update_status.emit("No audio recorded")
+
+    def on_command_press(self):
+        """Called when command mode PTT is activated."""
+        print("\n[CMD] Activated")
+
+        if self.ui_window:
+            self.ui_window.signals.update_command_status.emit("CMD: Listening...", "listening")
+
+        self.is_command_recording = True
+        self.recorded_command_audio = []
+        self.audio_capture.clear_queue()
+        self._last_interim_text = ""
+        self._last_interim_update = 0.0
+
+        if self.transcriber.supports_streaming():
+            self.transcriber.start_stream("command")
+
+    def on_command_release(self):
+        """Called when command mode PTT is released."""
+        print("[CMD] Released")
+
+        if self.ui_window:
+            self.ui_window.signals.update_command_status.emit("CMD: Processing...", "processing")
+
+        self.is_command_recording = False
+
+        # Process recorded command audio
+        if len(self.recorded_command_audio) > 0:
+            self.process_command_recording()
+        else:
+            if self.transcriber.supports_streaming():
+                self.transcriber.finish_stream("command")
+            print("[CMD] No audio recorded")
+            if self.ui_window:
+                self.ui_window.signals.update_command_status.emit("CMD: No audio recorded", "unrecognized")
+
+    def _normalize_command_text(self, text: str) -> str:
+        """Normalize text for command matching."""
+        normalized = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+        return f" {normalized} " if normalized else ""
+
+    def _parse_window_command(self, text: str) -> Optional[str]:
+        """Parse the transcribed text into a window command."""
+        normalized = self._normalize_command_text(text)
+        if not normalized:
+            return None
+
+        command_phrases = [
+            ("left", ["left", "left half", "left side", "left hand", "left-hand"]),
+            ("right", ["right", "right half", "right side", "right hand", "right-hand"]),
+            ("top", ["top", "top half", "upper", "upper half", "up"]),
+            ("bottom", ["bottom", "bottom half", "lower", "lower half", "down"]),
+        ]
+
+        for position, phrases in command_phrases:
+            for phrase in phrases:
+                if f" {phrase} " in normalized:
+                    return position
+
+        return None
+
+    def process_command_recording(self):
+        """Process the recorded command audio."""
+        # Concatenate all recorded chunks
+        audio = np.concatenate(self.recorded_command_audio).flatten()
+
+        print(f"[CMD] Processing {len(audio)} samples ({len(audio)/self.config['audio']['sample_rate']:.2f}s)")
+
+        # Finalize streaming (if enabled) or fall back to offline transcription
+        text = None
+        if self.transcriber.supports_streaming():
+            text = self.transcriber.finish_stream("command")
+
+        if not text:
+            # Apply noise suppression for offline transcription
+            audio = self.noise_suppressor.process(audio)
+            text = self.transcriber.transcribe(audio)
+
+        if not text:
+            print("[CMD] No transcription generated")
+            if self.ui_window:
+                self.ui_window.signals.update_command_status.emit("CMD: No speech detected", "unrecognized")
+            return
+
+        print(f"[CMD] Transcribed: {text}")
+
+        command = self._parse_window_command(text)
+        if command:
+            print(f"[CMD] Recognized command: {command}")
+            if self.window_manager:
+                self.window_manager.resize_focused_window(command)
+            if self.ui_window:
+                self.ui_window.signals.update_command_status.emit(
+                    f"CMD: {command.title()} (recognized)",
+                    "recognized"
+                )
+        else:
+            print(f"[CMD] Unrecognized command: {text}")
+            if self.ui_window:
+                self.ui_window.signals.update_command_status.emit(
+                    f"CMD: Unrecognized ({text})",
+                    "unrecognized"
+                )
 
     def process_recording(self):
         """Process the recorded audio."""
@@ -144,7 +263,12 @@ class Bloviate:
 
         print(f"Processing {len(audio)} samples ({len(audio)/self.config['audio']['sample_rate']:.2f}s)")
 
-        # Apply noise suppression
+        # Finalize streaming (if enabled) before running heavy processing
+        stream_text = None
+        if self.transcriber.supports_streaming():
+            stream_text = self.transcriber.finish_stream("dictation")
+
+        # Apply noise suppression for voice fingerprinting
         audio = self.noise_suppressor.process(audio)
 
         # Verify speaker
@@ -161,11 +285,11 @@ class Bloviate:
                 self.ui_window.signals.update_status.emit("Voice rejected")
             return
 
-        # Transcribe
+        # Transcribe (use streaming result if available)
         if self.ui_window:
             self.ui_window.signals.update_status.emit("Transcribing...")
 
-        text = self.transcriber.transcribe(audio)
+        text = stream_text or self.transcriber.transcribe(audio)
 
         if text:
             print(f"✓ Transcribed: {text}")
@@ -182,6 +306,16 @@ class Bloviate:
     def _setup_window_management_hotkeys(self):
         """Setup window management hotkeys."""
         prefix = self.config.get('window_management', {}).get('hotkey_prefix', '<ctrl>+<cmd>')
+        command_hotkey = self.config.get('window_management', {}).get('command_hotkey', prefix)
+
+        # Command mode hotkey (voice-driven window management)
+        self.ptt_handler.add_hotkey(
+            'window_command_mode',
+            command_hotkey,
+            on_press=self.on_command_press,
+            on_release=self.on_command_release,
+            match_exact=True
+        )
 
         # Add hotkeys for each direction
         self.ptt_handler.add_hotkey(
@@ -206,6 +340,7 @@ class Bloviate:
         )
 
         print(f"Window management enabled with hotkey prefix: {prefix}")
+        print(f"Command mode hotkey: {command_hotkey}")
         print("  Ctrl+Cmd+← = Left half")
         print("  Ctrl+Cmd+→ = Right half")
         print("  Ctrl+Cmd+↑ = Top half")
@@ -221,12 +356,41 @@ class Bloviate:
         # Record audio if PTT is active
         if self.is_recording:
             self.recorded_audio.append(audio_data.copy())
+            if self.transcriber.supports_streaming():
+                self.transcriber.send_audio_chunk("dictation", audio_data)
+                self._emit_interim("dictation")
+
+        # Record audio if command mode is active
+        if self.is_command_recording:
+            self.recorded_command_audio.append(audio_data.copy())
+            if self.transcriber.supports_streaming():
+                self.transcriber.send_audio_chunk("command", audio_data)
+
+    def _emit_interim(self, mode: str):
+        """Emit interim transcription updates with throttling."""
+        if not self.ui_window:
+            return
+
+        now = time.time()
+        if now - self._last_interim_update < self._interim_update_interval_s:
+            return
+
+        text = self.transcriber.get_stream_interim(mode)
+        if not text or text == self._last_interim_text:
+            return
+
+        self._last_interim_text = text
+        self._last_interim_update = now
+        self.ui_window.signals.update_interim_transcription.emit(text)
 
     def run(self):
         """Run the main application."""
         # Check if voice is enrolled
         if not self.voice_fingerprint.is_enrolled():
             print("Voice not enrolled. Please run with --enroll first.")
+            return
+        if self.config.get("voice_fingerprint", {}).get("enabled", False) and not self.voice_fingerprint.enabled:
+            print("Voice fingerprinting failed to initialize; aborting to avoid unverified dictation.")
             return
 
         print("\n=== Bloviate ===")
