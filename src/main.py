@@ -27,10 +27,13 @@ from window_manager import WindowManager
 class Bloviate:
     """Main application class."""
 
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config.yaml", voice_mode_override: Optional[str] = None):
         # Load configuration
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
+
+        self.voice_mode = self._resolve_voice_mode(voice_mode_override)
+        self.talk_mode = self.voice_mode == "talk"
 
         # Initialize components
         self.audio_capture = AudioCapture(self.config)
@@ -56,6 +59,21 @@ class Bloviate:
         self._interim_update_interval_s = float(
             self.config.get("ui", {}).get("interim_update_interval_s", 0.15)
         )
+
+    def _resolve_voice_mode(self, override: Optional[str] = None) -> str:
+        """Resolve voice mode from config/CLI override."""
+        if override is not None:
+            mode = override
+        else:
+            mode = self.config.get("voice_fingerprint", {}).get("mode", "whisper")
+
+        mode = str(mode).strip().lower()
+        if mode in {"talk", "open", "bypass"}:
+            return "talk"
+        if mode != "whisper":
+            print(f"Unknown voice mode '{mode}', defaulting to whisper.")
+            return "whisper"
+        return mode
 
     def enroll_voice(self):
         """Run voice enrollment process."""
@@ -268,18 +286,21 @@ class Bloviate:
         if self.transcriber.supports_streaming():
             stream_text = self.transcriber.finish_stream("dictation")
 
-        # Apply noise suppression for voice fingerprinting
+        # Apply noise suppression for fingerprinting/transcription
         audio = self.noise_suppressor.process(audio)
 
-        # Verify speaker
-        is_match, similarity = self.voice_fingerprint.verify_speaker(audio)
-
-        print(f"Voice match: {is_match} (similarity: {similarity:.3f})")
+        # Verify speaker (or bypass in talk mode)
+        if self.talk_mode:
+            is_match, similarity = True, -1.0
+            print("Voice match: bypassed (talk mode)")
+        else:
+            is_match, similarity = self.voice_fingerprint.verify_speaker(audio)
+            print(f"Voice match: {is_match} (similarity: {similarity:.3f})")
 
         if self.ui_window:
             self.ui_window.signals.update_voice_match.emit(is_match, similarity)
 
-        if not is_match:
+        if not self.talk_mode and not is_match:
             print("✗ Voice rejected - does not match enrolled profile")
             if self.ui_window:
                 self.ui_window.signals.update_status.emit("Voice rejected")
@@ -385,21 +406,29 @@ class Bloviate:
 
     def run(self):
         """Run the main application."""
-        # Check if voice is enrolled
-        if not self.voice_fingerprint.is_enrolled():
+        # Check if voice is enrolled (unless talk mode)
+        if not self.talk_mode and not self.voice_fingerprint.is_enrolled():
             print("Voice not enrolled. Please run with --enroll first.")
             return
-        if self.config.get("voice_fingerprint", {}).get("enabled", False) and not self.voice_fingerprint.enabled:
+        if not self.talk_mode and self.config.get("voice_fingerprint", {}).get("enabled", False) and not self.voice_fingerprint.enabled:
             print("Voice fingerprinting failed to initialize; aborting to avoid unverified dictation.")
             return
+        if self.talk_mode and self.config.get("voice_fingerprint", {}).get("enabled", False) and not self.voice_fingerprint.enabled:
+            print("Voice fingerprinting unavailable; talk mode bypasses verification.")
 
         print("\n=== Bloviate ===")
-        print(f"Hotkey: {self.ptt_handler.hotkey_str}")
+        if len(self.ptt_handler.hotkey_strs) > 1:
+            print(f"Hotkeys: {', '.join(self.ptt_handler.hotkey_strs)}")
+        else:
+            print(f"Hotkey: {self.ptt_handler.hotkey_str}")
+        print(f"Voice mode: {self.voice_mode}")
         print("Press and hold the hotkey to record, release to transcribe.")
         print("Press Ctrl+C to exit.\n")
 
         # Create UI
         self.ui_app, self.ui_window = create_ui(self.config)
+        if self.talk_mode and self.ui_window:
+            self.ui_window.signals.update_voice_match.emit(True, -1.0)
 
         # Start audio capture
         self.audio_capture.start()
@@ -477,6 +506,11 @@ def main():
         action='store_true',
         help='Clear the existing voice profile'
     )
+    parser.add_argument(
+        '--voice-mode',
+        choices=['whisper', 'talk'],
+        help='Override voice mode (whisper=verify, talk=bypass)'
+    )
 
     args = parser.parse_args()
 
@@ -485,7 +519,7 @@ def main():
     import os
     os.chdir(project_dir)
 
-    app = Bloviate(config_path=args.config)
+    app = Bloviate(config_path=args.config, voice_mode_override=args.voice_mode)
 
     if args.clear_profile:
         app.voice_fingerprint.clear_profile()

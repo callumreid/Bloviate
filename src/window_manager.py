@@ -77,17 +77,30 @@ class WindowManager:
             print(f"Unknown position: {position}")
             return
 
-        # AppleScript to resize focused window
+        # AppleScript to resize a visible front window (skip apps without windows).
         script = f'''
         tell application "System Events"
-            set frontApp to first application process whose frontmost is true
-            tell frontApp
-                tell window 1
-                    set position to {{{x}, {y}}}
-                    set size to {{{width}, {height}}}
-                end tell
-            end tell
+            set targetApp to missing value
+            try
+                set targetApp to first application process whose visible is true and (count of windows) > 0
+            end try
+            if targetApp is missing value then return "NO_WINDOW"
+
+            set targetWindow to missing value
+            try
+                set targetWindow to first window of targetApp whose value of attribute "AXMain" is true
+            end try
+            if targetWindow is missing value then
+                try
+                    set targetWindow to front window of targetApp
+                end try
+            end if
+            if targetWindow is missing value then return "NO_WINDOW"
+
+            set position of targetWindow to {{{x}, {y}}}
+            set size of targetWindow to {{{width}, {height}}}
         end tell
+        return "OK"
         '''
 
         try:
@@ -99,6 +112,8 @@ class WindowManager:
             )
             if result.returncode != 0:
                 print(f"Window resize error: {result.stderr}")
+            elif result.stdout.strip() == "NO_WINDOW":
+                print("Window resize error: No visible window found to resize.")
         except Exception as e:
             print(f"Error resizing window: {e}")
 

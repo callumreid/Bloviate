@@ -265,6 +265,190 @@ class MenuBarIndicator:
         self.tray_icon.hide()
 
 
+class BottomOverlayIndicator(QWidget):
+    """Bottom-center overlay mirroring the menu bar equalizer icon."""
+
+    _SIZE = 48  # Points — visible on screen while still compact
+    _BAR_COUNT = 5
+    _GAP = 3
+    _MARGIN = 6
+    _PROFILE = [0.35, 0.6, 0.9, 0.6, 0.35]
+    _MIN_BAR_HEIGHT = 0.12
+    _BAR_RADIUS = 2
+
+    def __init__(self, config: dict):
+        super().__init__(None)
+        self.config = config
+        self.audio_level = 0.0
+        self.current_state = "idle"
+        self._pulse_phase = False
+        self._hold_state = None
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(320)
+        self._pulse_timer.timeout.connect(self._toggle_pulse)
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.timeout.connect(self._clear_hold_and_idle)
+
+        overlay_cfg = self.config.get("ui", {}).get("ptt_overlay", {})
+        self._screen_margin = int(overlay_cfg.get("margin", 20))
+
+        self.setFixedSize(self._SIZE, self._SIZE)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.BypassWindowManagerHint
+        )
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Defer show until the event loop is running
+        QTimer.singleShot(0, self._initial_show)
+
+    def _initial_show(self):
+        self._position_bottom_center()
+        self.show()
+
+    def _toggle_pulse(self):
+        self._pulse_phase = not self._pulse_phase
+        if self.current_state in {"processing", "command_processing"}:
+            self.update()
+
+    def _pulse_color(self) -> QColor:
+        return QColor(156, 39, 176) if self._pulse_phase else QColor(123, 31, 162)
+
+    def _set_hold(self, state: str, hold_ms: int = 2000):
+        self._hold_state = state
+        self._hold_timer.start(hold_ms)
+
+    def _clear_hold(self):
+        self._hold_state = None
+        if self._hold_timer.isActive():
+            self._hold_timer.stop()
+
+    def _clear_hold_and_idle(self):
+        if self._hold_state and self.current_state == self._hold_state:
+            self._hold_state = None
+            self.set_idle()
+
+    def _position_bottom_center(self):
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return
+        geo = screen.availableGeometry()
+        x = geo.x() + int((geo.width() - self._SIZE) / 2)
+        y = geo.y() + geo.height() - self._SIZE - self._screen_margin
+        self.move(x, y)
+
+    def _state_color(self) -> QColor:
+        if self.current_state in {"processing", "command_processing"}:
+            return self._pulse_color()
+        if self.current_state == "recording":
+            return QColor(255, 193, 7)
+        if self.current_state == "command_recording":
+            return QColor(33, 150, 243)
+        if self.current_state in {"command_success", "accepted"}:
+            return QColor(76, 175, 80)
+        if self.current_state in {"command_unknown", "rejected"}:
+            return QColor(244, 67, 54)
+        return QColor(160, 160, 160)
+
+    def set_audio_level(self, level: float):
+        self.audio_level = max(0.0, min(level, 1.0))
+        self.update()
+
+    def set_recording(self):
+        self._clear_hold()
+        self.current_state = "recording"
+        self._stop_pulse()
+        self.update()
+
+    def set_processing(self):
+        self._clear_hold()
+        self.current_state = "processing"
+        self._start_pulse()
+        self.update()
+
+    def set_command_recording(self):
+        self._clear_hold()
+        self.current_state = "command_recording"
+        self._stop_pulse()
+        self.update()
+
+    def set_command_processing(self):
+        self._clear_hold()
+        self.current_state = "command_processing"
+        self._start_pulse()
+        self.update()
+
+    def set_command_success(self):
+        self._clear_hold()
+        self.current_state = "command_success"
+        self._stop_pulse()
+        self._set_hold("command_success")
+        self.update()
+
+    def set_command_unknown(self):
+        self._clear_hold()
+        self.current_state = "command_unknown"
+        self._stop_pulse()
+        self._set_hold("command_unknown")
+        self.update()
+
+    def set_accepted(self):
+        self._clear_hold()
+        self.current_state = "accepted"
+        self._stop_pulse()
+        self._set_hold("accepted")
+        self.update()
+
+    def set_rejected(self):
+        self._clear_hold()
+        self.current_state = "rejected"
+        self._stop_pulse()
+        self._set_hold("rejected")
+        self.update()
+
+    def set_idle(self):
+        if self._hold_state and self.current_state == self._hold_state:
+            return
+        self.current_state = "idle"
+        self._stop_pulse()
+        self._clear_hold()
+        self.update()
+
+    def _start_pulse(self):
+        if not self._pulse_timer.isActive():
+            self._pulse_timer.start()
+
+    def _stop_pulse(self):
+        if self._pulse_timer.isActive():
+            self._pulse_timer.stop()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        # Equalizer bars only — no background
+        painter.setBrush(self._state_color())
+        level = max(0.0, min(self.audio_level, 1.0))
+        usable_w = self._SIZE - self._MARGIN * 2
+        usable_h = self._SIZE - self._MARGIN * 2
+        bar_w = int((usable_w - self._GAP * (self._BAR_COUNT - 1)) / self._BAR_COUNT)
+
+        for idx, base in enumerate(self._PROFILE):
+            height_ratio = self._MIN_BAR_HEIGHT + (base - self._MIN_BAR_HEIGHT) * level
+            h = int(usable_h * height_ratio)
+            x = self._MARGIN + idx * (bar_w + self._GAP)
+            y = self._MARGIN + (usable_h - h)
+            painter.drawRoundedRect(x, y, bar_w, h, self._BAR_RADIUS, self._BAR_RADIUS)
+
+        painter.end()
+
+
 class BloviateUI(QMainWindow):
     """Minimal UI showing real-time feedback."""
 
@@ -277,6 +461,11 @@ class BloviateUI(QMainWindow):
         self.menu_bar_indicator = None
         if config['ui'].get('show_menubar_indicator', True):
             self.menu_bar_indicator = MenuBarIndicator(parent=self)
+
+        # Create bottom overlay indicator if enabled
+        self.ptt_overlay = None
+        if config.get("ui", {}).get("ptt_overlay", {}).get("enabled", True):
+            self.ptt_overlay = BottomOverlayIndicator(config)
 
         # Connect signals
         self.signals.update_audio_level.connect(self._update_audio_level)
@@ -396,6 +585,9 @@ class BloviateUI(QMainWindow):
         if self.menu_bar_indicator:
             self.menu_bar_indicator.set_audio_level(level / 0.3)
 
+        if self.ptt_overlay:
+            self.ptt_overlay.set_audio_level(level / 0.3)
+
         # Color based on level
         if percentage > 60:
             color = "#4CAF50"  # Green
@@ -426,6 +618,8 @@ class BloviateUI(QMainWindow):
             # Update menu bar indicator
             if self.menu_bar_indicator:
                 self.menu_bar_indicator.set_recording()
+            if self.ptt_overlay:
+                self.ptt_overlay.set_recording()
         else:
             self.ptt_label.setText("PTT: Inactive")
             self.ptt_label.setStyleSheet(
@@ -469,19 +663,41 @@ class BloviateUI(QMainWindow):
             elif state == "inactive":
                 self.menu_bar_indicator.set_idle()
 
+        if self.ptt_overlay:
+            if state == "listening":
+                self.ptt_overlay.set_command_recording()
+            elif state == "processing":
+                self.ptt_overlay.set_command_processing()
+            elif state == "recognized":
+                self.ptt_overlay.set_command_success()
+            elif state == "unrecognized":
+                self.ptt_overlay.set_command_unknown()
+            elif state == "inactive":
+                self.ptt_overlay.set_idle()
+
     def _update_voice_match(self, is_match: bool, score: float):
         """Update voice match status."""
+        if score < 0:
+            self.match_status_label.setText("Talk mode")
+            self.match_status_label.setStyleSheet("color: #9E9E9E; font-weight: bold;")
+            self.match_score_label.setText("")
+            return
+
         if is_match:
             self.match_status_label.setText("✓ Matched")
             self.match_status_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
             if self.menu_bar_indicator:
                 self.menu_bar_indicator.set_accepted()
+            if self.ptt_overlay:
+                self.ptt_overlay.set_accepted()
         else:
             self.match_status_label.setText("✗ Rejected")
             self.match_status_label.setStyleSheet("color: #F44336; font-weight: bold;")
             # Update menu bar indicator
             if self.menu_bar_indicator:
                 self.menu_bar_indicator.set_rejected()
+            if self.ptt_overlay:
+                self.ptt_overlay.set_rejected()
 
         self.match_score_label.setText(f"({score:.2f})")
 
@@ -501,6 +717,14 @@ class BloviateUI(QMainWindow):
                 else:
                     self.menu_bar_indicator.set_rejected()
 
+        if self.ptt_overlay:
+            if message == "Processing..." or message == "Transcribing...":
+                self.ptt_overlay.set_processing()
+            elif message == "Ready":
+                self.ptt_overlay.set_idle()
+            elif message in ["Voice rejected", "No audio recorded", "No speech detected"]:
+                self.ptt_overlay.set_rejected()
+
     def _update_transcription(self, text: str):
         """Update the last transcription display."""
         self.transcription_label.setText(f"Last: {text}")
@@ -509,6 +733,8 @@ class BloviateUI(QMainWindow):
         # Show success in menu bar
         if self.menu_bar_indicator:
             self.menu_bar_indicator.set_accepted()
+        if self.ptt_overlay:
+            self.ptt_overlay.set_accepted()
 
     def _update_interim_transcription(self, text: str):
         """Update interim transcription display while recording."""
@@ -526,6 +752,8 @@ class BloviateUI(QMainWindow):
         # Clean up menu bar indicator
         if self.menu_bar_indicator:
             self.menu_bar_indicator.close()
+        if self.ptt_overlay:
+            self.ptt_overlay.close()
         super().closeEvent(event)
 
 
@@ -538,6 +766,9 @@ def create_ui(config: dict) -> tuple[QApplication, BloviateUI]:
     """
     app = QApplication(sys.argv)
     window = BloviateUI(config)
-    window.show()
+    if config.get("ui", {}).get("show_main_window", True):
+        window.show()
+    else:
+        window.hide()
 
     return app, window

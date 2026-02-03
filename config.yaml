@@ -10,6 +10,7 @@ audio:
 # Push-to-Talk Settings
 ptt:
   hotkey: "<cmd>+<option>"
+  secondary_hotkey: "<fn>"  # Optional secondary PTT hotkey
 
 # Window Management Settings
 window_management:
@@ -20,6 +21,7 @@ window_management:
 # Voice Fingerprinting
 voice_fingerprint:
   enabled: true
+  mode: "whisper"  # whisper (verify) or talk (bypass verification)
   threshold: 0.65  # 0-1, higher = stricter matching
   embedding_model: "speechbrain/spkrec-ecapa-voxceleb"
   min_enrollment_samples: 5
@@ -53,6 +55,7 @@ deepgram:
   endpointing: 300  # ms of silence before finalizing
   eot_timeout_ms: 800  # v2 end-of-transcript timeout; uses endpointing if unset.
   no_delay: true
+  api_key: "86f29b846a3ab6004b8f9142f478ddcbc5c00b13"
   api_key_env: "DEEPGRAM_API_KEY"
   finalize_wait_s: 0.6
   connect_timeout_s: 2.0
@@ -68,3 +71,7 @@ ui:
   theme: "dark"
   interim_update_interval_s: 0.15
   show_menubar_indicator: true  # Show status in macOS menu bar
+  show_main_window: false  # Hide the debug/status window by default
+  ptt_overlay:
+    enabled: true
+    margin: 20  # Distance from bottom of screen

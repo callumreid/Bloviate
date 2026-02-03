@@ -39,6 +39,9 @@ python src/main.py
 - Whisper into your mic
 - Release when done
 - Only audio matching your voice will be transcribed
+- Use talk mode to bypass voice matching:
+  - `python src/main.py --voice-mode talk`
+  - Or set `voice_fingerprint.mode: "talk"` in `config.yaml`
 
 ### 3. Configuration
 Edit `config.yaml` to customize:

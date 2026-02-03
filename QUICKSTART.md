@@ -73,7 +73,8 @@ Edit `config.yaml` to customize:
 ### Change Hotkey
 ```yaml
 ptt:
-  hotkey: "<cmd>+<option>"  # Current default
+  hotkey: "<cmd>+<option>"  # Primary hotkey
+  secondary_hotkey: "<fn>"  # Optional secondary hotkey
   # Other options:
   # "<ctrl>+<shift>+<space>"
   # "<cmd>+<shift>+<space>"
@@ -94,6 +95,20 @@ voice_fingerprint:
 ```
 
 If you're getting too many false rejections, lower the threshold to 0.6 or 0.55.
+
+### Talk Mode (Bypass Voice Matching)
+Use talk mode when you want normal speech to pass without voice verification.
+
+```yaml
+voice_fingerprint:
+  mode: "talk"  # whisper (verify) or talk (bypass)
+```
+
+Or run a one-off session:
+
+```bash
+python src/main.py --voice-mode talk
+```
 
 ### Select Audio Device
 ```yaml

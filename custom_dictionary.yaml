@@ -107,6 +107,19 @@ entries:
       - "NPM run"
       - "n p m run"
 
+  - phrase: "Does the linter pass?"
+    variations:
+      - "Does the winter pass?"
+      - "Does the linter pass"
+      - "Does the lint or pass?"
+      - "Does the lint or pass"
+      - "Does the lint her pass?"
+      - "Does the lint her pass"
+      - "Does the lender pass?"
+      - "Does the lender pass"
+      - "Does the lint pass?"
+      - "Does the lint pass"
+
   - phrase: "pnpm install"
     variations:
       - "p n p m install"
@@ -239,10 +252,25 @@ entries:
       - "ob city and"
       - "ob city in"
 
+  - phrase: "Obsidian notebook"
+    variations:
+      - "simcity notebook"
+      - "sim city notebook"
+      - "sim city note book"
+      - "simcity note book"
+
   - phrase: "Strava"
     variations:
       - "strava"
       - "stravah"
+
+  - phrase: "pull data from Strava and append it to my daily notes for the date"
+    variations:
+      - "pull data from and append it to my daily notes for the date"
+
+  - phrase: "pull data from Strava and append it to my daily notes"
+    variations:
+      - "pull data from and append it to my daily notes"
 
   - phrase: "Jeopardy"
     variations:
