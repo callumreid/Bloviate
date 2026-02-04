@@ -301,15 +301,76 @@ class BottomOverlayIndicator(QWidget):
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.WindowDoesNotAcceptFocus
-            | Qt.WindowType.BypassWindowManagerHint
+            | Qt.WindowType.Tool
         )
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._closed = False
+        self._visibility_timer = QTimer(self)
+        self._visibility_timer.setInterval(2000)
+        self._visibility_timer.timeout.connect(self._ensure_visible)
         # Defer show until the event loop is running
         QTimer.singleShot(0, self._initial_show)
 
     def _initial_show(self):
         self._position_bottom_center()
         self.show()
+        self._apply_macos_window_properties()
+        self._visibility_timer.start()
+
+    def _apply_macos_window_properties(self):
+        """Set macOS window level and collection behavior so overlay
+        stays visible on all Spaces and alongside full-screen apps."""
+        if sys.platform != 'darwin':
+            return
+        try:
+            import ctypes
+            import ctypes.util
+
+            objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc'))
+            sel = objc.sel_registerName
+            sel.restype = ctypes.c_void_p
+            sel.argtypes = [ctypes.c_char_p]
+            msg = objc.objc_msgSend
+
+            # Get NSWindow from the native NSView
+            msg.restype = ctypes.c_void_p
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            ns_window = msg(int(self.winId()), sel(b'window'))
+            if not ns_window:
+                return
+
+            # NSStatusWindowLevel (25) — above floating panels and normal windows
+            msg.restype = None
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+            msg(ns_window, sel(b'setLevel:'), 25)
+
+            # Collection behavior flags:
+            #   canJoinAllSpaces   (1)   – appear on every Space
+            #   stationary         (16)  – don't move with Space switches
+            #   ignoresCycle       (64)  – skip in Cmd-Tab
+            #   fullScreenAuxiliary(256) – visible alongside full-screen apps
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
+            msg(ns_window, sel(b'setCollectionBehavior:'), 1 | 16 | 64 | 256)
+        except Exception as e:
+            print(f"Warning: could not set macOS overlay properties: {e}")
+
+    def _ensure_visible(self):
+        """Watchdog: re-show the overlay if it was hidden unexpectedly."""
+        if self._closed:
+            return
+        if not self.isVisible():
+            self._position_bottom_center()
+            self.show()
+            self.raise_()
+            self._apply_macos_window_properties()
+
+    def close(self):
+        """Permanently close the overlay and stop all timers."""
+        self._closed = True
+        self._visibility_timer.stop()
+        self._pulse_timer.stop()
+        self._hold_timer.stop()
+        super().close()
 
     def _toggle_pulse(self):
         self._pulse_phase = not self._pulse_phase
@@ -578,15 +639,15 @@ class BloviateUI(QMainWindow):
     def _update_audio_level(self, level: float):
         """Update the audio level bar."""
         # Convert to percentage (assume max level is 0.3 for speaking)
-        percentage = min(int(level / 0.3 * 100), 100)
+        percentage = min(int(level / 0.26 * 100), 100)
         self.audio_bar.setValue(percentage)
 
         # Update menu bar indicator
         if self.menu_bar_indicator:
-            self.menu_bar_indicator.set_audio_level(level / 0.3)
+            self.menu_bar_indicator.set_audio_level(level / 0.26)
 
         if self.ptt_overlay:
-            self.ptt_overlay.set_audio_level(level / 0.3)
+            self.ptt_overlay.set_audio_level(level / 0.26)
 
         # Color based on level
         if percentage > 60:

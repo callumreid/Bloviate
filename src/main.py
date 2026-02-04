@@ -218,18 +218,118 @@ class Bloviate:
             return None
 
         command_phrases = [
+            # Halves
             ("left", ["left", "left half", "left side", "left hand", "left-hand"]),
             ("right", ["right", "right half", "right side", "right hand", "right-hand"]),
             ("top", ["top", "top half", "upper", "upper half", "up"]),
             ("bottom", ["bottom", "bottom half", "lower", "lower half", "down"]),
+            # Full screen
+            ("fullscreen", ["full screen", "fullscreen", "maximize"]),
+            ("exit_fullscreen", ["exit full screen", "exit fullscreen", "unmaximize", "restore"]),
+            # Resize
+            ("larger", ["larger", "bigger", "grow"]),
+            ("smaller", ["smaller", "shrink"]),
+            # Quarters
+            ("top_left_quarter", ["top left quarter", "top left", "first quarter"]),
+            ("top_right_quarter", ["top right quarter", "top right", "second quarter"]),
+            ("bottom_left_quarter", ["bottom left quarter", "bottom left", "third quarter"]),
+            ("bottom_right_quarter", ["bottom right quarter", "bottom right", "fourth quarter"]),
+            # Desktop switching
+            ("desktop_left", ["desktop left"]),
+            ("desktop_right", ["desktop right"]),
         ]
 
+        # Build flat list and sort by phrase length descending so longer
+        # phrases match before shorter ones (e.g. "top left" before "top")
+        all_phrases = []
         for position, phrases in command_phrases:
             for phrase in phrases:
-                if f" {phrase} " in normalized:
-                    return position
+                all_phrases.append((phrase, position))
+        all_phrases.sort(key=lambda x: len(x[0]), reverse=True)
+
+        for phrase, position in all_phrases:
+            if f" {phrase} " in normalized:
+                return position
 
         return None
+
+    def _try_voice_command(self, text: str) -> bool:
+        """Check if dictated text contains a voice command (window/desktop).
+
+        Looks for 'window <command>' or 'desktop <command>' patterns.
+        Returns True if a command was found and executed.
+        """
+        if not self.window_manager:
+            return False
+
+        normalized = self._normalize_command_text(text)
+        if not normalized:
+            return False
+
+        # Define the known command suffixes for each prefix
+        window_suffixes = [
+            ("left", ["left", "left half", "left side"]),
+            ("right", ["right", "right half", "right side"]),
+            ("top", ["top", "top half", "upper half"]),
+            ("bottom", ["bottom", "bottom half", "lower half"]),
+            ("fullscreen", ["full screen", "fullscreen", "maximize"]),
+            ("exit_fullscreen", ["exit full screen", "exit fullscreen", "unmaximize", "restore"]),
+            ("larger", ["larger", "bigger", "grow"]),
+            ("smaller", ["smaller", "shrink"]),
+            ("top_left_quarter", ["top left quarter", "top left"]),
+            ("top_right_quarter", ["top right quarter", "top right"]),
+            ("bottom_left_quarter", ["bottom left quarter", "bottom left"]),
+            ("bottom_right_quarter", ["bottom right quarter", "bottom right"]),
+        ]
+
+        desktop_suffixes = [
+            ("desktop_left", ["left"]),
+            ("desktop_right", ["right"]),
+        ]
+
+        # Build sorted phrase lists (longest first)
+        window_phrases = []
+        for position, suffixes in window_suffixes:
+            for suffix in suffixes:
+                window_phrases.append((suffix, position))
+        window_phrases.sort(key=lambda x: len(x[0]), reverse=True)
+
+        desktop_phrases = []
+        for position, suffixes in desktop_suffixes:
+            for suffix in suffixes:
+                desktop_phrases.append((suffix, position))
+        desktop_phrases.sort(key=lambda x: len(x[0]), reverse=True)
+
+        # Check for "window <command>"
+        for suffix, position in window_phrases:
+            if f" window {suffix} " in normalized:
+                print(f"[VOICE CMD] Matched 'window {suffix}' → {position}")
+                self._execute_voice_command(position, text)
+                return True
+
+        # Check for "desktop <command>"
+        for suffix, position in desktop_phrases:
+            if f" desktop {suffix} " in normalized:
+                print(f"[VOICE CMD] Matched 'desktop {suffix}' → {position}")
+                self._execute_voice_command(position, text)
+                return True
+
+        return False
+
+    def _execute_voice_command(self, command: str, original_text: str):
+        """Execute a voice command and update UI."""
+        if command.startswith("desktop_"):
+            direction = command.replace("desktop_", "")
+            self.window_manager.switch_desktop(direction)
+        else:
+            self.window_manager.resize_focused_window(command)
+
+        if self.ui_window:
+            self.ui_window.signals.update_command_status.emit(
+                f"Voice: {command.replace('_', ' ').title()}",
+                "recognized"
+            )
+            self.ui_window.signals.update_status.emit("Ready")
 
     def process_command_recording(self):
         """Process the recorded command audio."""
@@ -260,10 +360,14 @@ class Bloviate:
         if command:
             print(f"[CMD] Recognized command: {command}")
             if self.window_manager:
-                self.window_manager.resize_focused_window(command)
+                if command.startswith("desktop_"):
+                    direction = command.replace("desktop_", "")
+                    self.window_manager.switch_desktop(direction)
+                else:
+                    self.window_manager.resize_focused_window(command)
             if self.ui_window:
                 self.ui_window.signals.update_command_status.emit(
-                    f"CMD: {command.title()} (recognized)",
+                    f"CMD: {command.replace('_', ' ').title()} (recognized)",
                     "recognized"
                 )
         else:
@@ -314,6 +418,11 @@ class Bloviate:
 
         if text:
             print(f"✓ Transcribed: {text}")
+
+            # Check if text contains a voice command
+            if self._try_voice_command(text):
+                return
+
             self.transcriber.output_text(text)
 
             if self.ui_window:

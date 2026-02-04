@@ -10,6 +10,16 @@
 #     variations: ["get check out dash b", "git check out dash b", "get checkout dash b"]
 
 entries:
+  # App name
+  - phrase: "Bloviate"
+    variations:
+      - "GloveAID"
+      - "glove aid"
+      - "glove eight"
+      - "blow viate"
+      - "blow v8"
+      - "bloviate"
+
   # Git commands
   - phrase: "git checkout -b"
     variations:
@@ -224,6 +234,7 @@ entries:
       - "git hub"
       - "get hub"
       - "github"
+      - "github*"
 
   - phrase: "Linear"
     variations:
