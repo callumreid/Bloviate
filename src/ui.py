@@ -297,72 +297,118 @@ class BottomOverlayIndicator(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        # Use a plain Window — not Tool (NSPanel), which macOS silently
+        # hides when there is no visible parent window.
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
+            Qt.WindowType.Window
+            | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-            | Qt.WindowType.Tool
         )
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._closed = False
+        self._objc = None  # cached ctypes handles
         self._visibility_timer = QTimer(self)
         self._visibility_timer.setInterval(2000)
         self._visibility_timer.timeout.connect(self._ensure_visible)
         # Defer show until the event loop is running
         QTimer.singleShot(0, self._initial_show)
 
-    def _initial_show(self):
-        self._position_bottom_center()
-        self.show()
-        self._apply_macos_window_properties()
-        self._visibility_timer.start()
+    # ------------------------------------------------------------------
+    # Cocoa helpers (macOS only)
+    # ------------------------------------------------------------------
 
-    def _apply_macos_window_properties(self):
-        """Set macOS window level and collection behavior so overlay
-        stays visible on all Spaces and alongside full-screen apps."""
+    def _get_objc(self):
+        """Lazily load and cache the Objective-C runtime handles."""
+        if self._objc is not None:
+            return self._objc
         if sys.platform != 'darwin':
-            return
+            return None
         try:
             import ctypes
             import ctypes.util
+            lib = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc'))
+            lib.sel_registerName.restype = ctypes.c_void_p
+            lib.sel_registerName.argtypes = [ctypes.c_char_p]
+            self._objc = (lib, ctypes)
+            return self._objc
+        except Exception:
+            return None
 
-            objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc'))
-            sel = objc.sel_registerName
-            sel.restype = ctypes.c_void_p
-            sel.argtypes = [ctypes.c_char_p]
-            msg = objc.objc_msgSend
+    def _get_ns_window(self):
+        """Return the native NSWindow pointer, or None."""
+        pair = self._get_objc()
+        if pair is None:
+            return None
+        lib, ctypes = pair
+        msg = lib.objc_msgSend
+        msg.restype = ctypes.c_void_p
+        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        return msg(int(self.winId()),
+                   lib.sel_registerName(b'window')) or None
 
-            # Get NSWindow from the native NSView
-            msg.restype = ctypes.c_void_p
-            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            ns_window = msg(int(self.winId()), sel(b'window'))
-            if not ns_window:
-                return
+    def _apply_macos_window_properties(self):
+        """Configure the native NSWindow so the overlay is always visible,
+        on every Space, alongside full-screen apps, and never steals focus."""
+        pair = self._get_objc()
+        if pair is None:
+            return
+        lib, ctypes = pair
+        ns_window = self._get_ns_window()
+        if not ns_window:
+            return
+        try:
+            msg = lib.objc_msgSend
+            sel = lib.sel_registerName
 
-            # NSStatusWindowLevel (25) — above floating panels and normal windows
+            # Window level: NSStatusWindowLevel (25)
             msg.restype = None
             msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
             msg(ns_window, sel(b'setLevel:'), 25)
 
-            # Collection behavior flags:
-            #   canJoinAllSpaces   (1)   – appear on every Space
-            #   stationary         (16)  – don't move with Space switches
-            #   ignoresCycle       (64)  – skip in Cmd-Tab
-            #   fullScreenAuxiliary(256) – visible alongside full-screen apps
+            # Collection behavior:
+            #   canJoinAllSpaces(1) | stationary(16) |
+            #   ignoresCycle(64)    | fullScreenAuxiliary(256)
             msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
-            msg(ns_window, sel(b'setCollectionBehavior:'), 1 | 16 | 64 | 256)
+            msg(ns_window, sel(b'setCollectionBehavior:'),
+                1 | 16 | 64 | 256)
+
+            # Don't hide when the app loses focus
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
+            msg(ns_window, sel(b'setHidesOnDeactivate:'), False)
+
+            # Ignore mouse events at the Cocoa level too
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
+            msg(ns_window, sel(b'setIgnoresMouseEvents:'), True)
+
+            # Force the window on screen regardless of app activation
+            msg.restype = None
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            msg(ns_window, sel(b'orderFrontRegardless'))
         except Exception as e:
             print(f"Warning: could not set macOS overlay properties: {e}")
 
+    # ------------------------------------------------------------------
+    # Show / visibility
+    # ------------------------------------------------------------------
+
+    def _initial_show(self):
+        self._position_bottom_center()
+        self.show()
+        # Short delay so the native NSWindow is fully wired up before
+        # we poke at it through the Objective-C runtime.
+        QTimer.singleShot(50, self._apply_macos_window_properties)
+        self._visibility_timer.start()
+
     def _ensure_visible(self):
-        """Watchdog: re-show the overlay if it was hidden unexpectedly."""
+        """Watchdog: re-show and reconfigure the overlay if it vanished."""
         if self._closed:
             return
         if not self.isVisible():
             self._position_bottom_center()
             self.show()
-            self.raise_()
-            self._apply_macos_window_properties()
+        # Always re-apply — catches cases where macOS hid the native
+        # window without Qt knowing (e.g. Expose, space transitions).
+        self._apply_macos_window_properties()
 
     def close(self):
         """Permanently close the overlay and stop all timers."""
