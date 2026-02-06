@@ -96,6 +96,28 @@ entries:
     variations:
       - "batch shell"
 
+  - phrase: "Claude"
+    match: "whole_word"
+    variations:
+      - "clod"
+      - "clawed"
+      - "cloud"
+
+  - phrase: "Jest"
+    match: "whole_word"
+    variations:
+      - "jest"
+
+  - phrase: "Jest tests"
+    variations:
+      - "just tests"
+      - "jest tests"
+
+  - phrase: "Jest test"
+    variations:
+      - "just test"
+      - "jest test"
+
   # Dev tools and commands
   - phrase: "git rebase"
     variations:
@@ -358,6 +380,11 @@ entries:
       - "fire tv stick"
       - "fire tee vee stick"
       - "fire t v stick"
+
+  - phrase: "Deepgram"
+    variations:
+      - "deep gram"
+      - "deep graham"
 
   # Acronyms and internal terms
   - phrase: "QOTD"
@@ -653,6 +680,11 @@ entries:
     variations:
       - "Aaron Vietti"
       - "Aaron Vieti"
+
+  - phrase: "Kobi"
+    match: "whole_word"
+    variations:
+      - "Kobe"
 
   - phrase: "Kobi Hudson"
     variations:
