@@ -308,7 +308,7 @@ class BottomOverlayIndicator(QWidget):
         self._closed = False
         self._objc = None  # cached ctypes handles
         self._visibility_timer = QTimer(self)
-        self._visibility_timer.setInterval(2000)
+        self._visibility_timer.setInterval(500)
         self._visibility_timer.timeout.connect(self._ensure_visible)
         # Defer show until the event loop is running
         QTimer.singleShot(0, self._initial_show)

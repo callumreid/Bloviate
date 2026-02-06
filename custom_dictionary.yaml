@@ -79,6 +79,23 @@ entries:
 
 
 
+  # Common misrecognitions
+  - phrase: "bash commands"
+    variations:
+      - "batch commands"
+
+  - phrase: "bash command"
+    variations:
+      - "batch command"
+
+  - phrase: "bash script"
+    variations:
+      - "batch script"
+
+  - phrase: "bash shell"
+    variations:
+      - "batch shell"
+
   # Dev tools and commands
   - phrase: "git rebase"
     variations:
@@ -444,6 +461,7 @@ entries:
       - "eff t u e"
 
   - phrase: "UI"
+    match: "whole_word"
     variations:
       - "u i"
       - "you eye"

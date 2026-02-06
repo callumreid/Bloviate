@@ -47,6 +47,8 @@ class DeepgramLiveSession:
         self._partial: str = ""
         self._lock = threading.Lock()
         self._error: Optional[str] = None
+        self._finalize_sent = False
+        self._got_final_after_finalize = threading.Event()
 
     def _on_open(self, _ws):
         self._connected.set()
@@ -74,15 +76,19 @@ class DeepgramLiveSession:
         with self._lock:
             if is_final:
                 self._final_parts.append(transcript)
+                if self._finalize_sent:
+                    self._got_final_after_finalize.set()
             else:
                 self._partial = transcript
 
     def _on_error(self, _ws, error):
         self._error = str(error)
         self.log(f"[Deepgram] Error: {error}")
+        self._got_final_after_finalize.set()
 
     def _on_close(self, _ws, status_code, message):
         self._closed.set()
+        self._got_final_after_finalize.set()
         if status_code or message:
             self.log(f"[Deepgram] Closed: {status_code} {message}")
 
@@ -153,6 +159,7 @@ class DeepgramLiveSession:
                 self.log(f"[Deepgram] Finalize error: {exc}")
 
     def finish(self) -> Optional[str]:
+        self._finalize_sent = True
         self.finalize()
 
         # Stop sending audio.
@@ -162,8 +169,9 @@ class DeepgramLiveSession:
         if self._sender_thread:
             self._sender_thread.join(timeout=1.0)
 
-        # Give Deepgram a moment to flush the final transcript.
-        time.sleep(self.finalize_wait_s)
+        # Wait for Deepgram to flush the final transcript, but return
+        # early if we already received it (or on error/close).
+        self._got_final_after_finalize.wait(timeout=self.finalize_wait_s)
 
         if self._ws:
             try:

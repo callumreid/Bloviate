@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -51,6 +52,7 @@ class Transcriber:
 
         # Track active Deepgram streams by mode name
         self._streams = {}
+        self._stream_ready_events = {}  # mode -> threading.Event
 
         if self.provider not in {"whisper", "deepgram"}:
             print(f"Unknown transcription provider '{self.provider}', defaulting to whisper")
@@ -59,17 +61,11 @@ class Transcriber:
         if self.provider == "deepgram" and DeepgramLiveSession is None:
             print("Deepgram live streaming unavailable (websocket-client not installed)")
 
-        # Load Whisper model only when needed
+        # Load Whisper model eagerly when it's the primary provider,
+        # otherwise it will be loaded lazily on first Deepgram fallback.
         self.model = None
         if self.provider == "whisper":
-            print(f"Loading Whisper model: {self.model_name}")
-            try:
-                import whisper
-                self.model = whisper.load_model(self.model_name)
-                print("Whisper model loaded")
-            except Exception as e:
-                print(f"Error loading Whisper model: {e}")
-                self.model = None
+            self._load_whisper_model()
 
     def _load_custom_dictionary(self):
         """Load custom dictionary from YAML file."""
@@ -138,15 +134,22 @@ class Transcriber:
         """
         Transcribe audio to text.
 
-        Args:
-            audio: Audio signal as numpy array
-
-        Returns:
-            Transcribed text or None if transcription fails
+        Falls back to local Whisper automatically when Deepgram is unreachable.
         """
         if self.provider == "deepgram":
-            return self._transcribe_deepgram_prerecorded(audio)
+            result = self._transcribe_deepgram_prerecorded(audio)
+            if result:
+                return result
+            # Deepgram failed — fall back to local Whisper
+            print("[Fallback] Deepgram unavailable, using local Whisper")
+            return self._transcribe_whisper(audio)
 
+        return self._transcribe_whisper(audio)
+
+    def _transcribe_whisper(self, audio: np.ndarray) -> Optional[str]:
+        """Transcribe with local Whisper model, loading it lazily if needed."""
+        if self.model is None:
+            self._load_whisper_model()
         if self.model is None:
             return None
 
@@ -188,6 +191,17 @@ class Transcriber:
             print(f"Transcription error: {e}")
             return None
 
+    def _load_whisper_model(self):
+        """Lazily load the Whisper model on first use."""
+        print(f"Loading Whisper model: {self.model_name}")
+        try:
+            import whisper
+            self.model = whisper.load_model(self.model_name)
+            print("Whisper model loaded")
+        except Exception as e:
+            print(f"Error loading Whisper model: {e}")
+            self.model = None
+
     def supports_streaming(self) -> bool:
         """Return True if live streaming is available for the current provider."""
         return (
@@ -197,13 +211,22 @@ class Transcriber:
         )
 
     def start_stream(self, mode: str) -> bool:
-        """Start a live streaming session for a given mode (e.g., dictation/command)."""
+        """Start a live streaming session for a given mode (e.g., dictation/command).
+
+        Safe to call from any thread.  Sets a ready event so that
+        finish_stream can wait for the connection attempt to complete.
+        """
+        evt = threading.Event()
+        self._stream_ready_events[mode] = evt
+
         if not self.supports_streaming():
+            evt.set()
             return False
 
         api_key = self._get_deepgram_api_key()
         if not api_key:
             print("Deepgram API key not set (DEEPGRAM_API_KEY or config)")
+            evt.set()
             return False
 
         url = self._build_deepgram_live_url()
@@ -217,12 +240,14 @@ class Transcriber:
 
         if not session.start():
             print("Deepgram live connection failed")
+            evt.set()
             return False
 
         self._streams[mode] = session
         pending = self._pending_audio.pop(mode, [])
         for chunk in pending:
             session.send_audio(chunk)
+        evt.set()
         return True
 
     def send_audio_chunk(self, mode: str, audio: np.ndarray):
@@ -241,6 +266,12 @@ class Transcriber:
 
     def finish_stream(self, mode: str) -> Optional[str]:
         """Finalize a live session and return the transcript."""
+        # Wait for the async connection attempt to finish (if any)
+        evt = self._stream_ready_events.pop(mode, None)
+        if evt:
+            connect_timeout = float(self.deepgram_config.get("connect_timeout_s", 2.0))
+            evt.wait(timeout=connect_timeout + 0.5)
+
         session = self._streams.pop(mode, None)
         if not session:
             self._pending_audio.pop(mode, None)

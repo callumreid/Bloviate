@@ -59,8 +59,11 @@ deepgram:
   api_key_env: "DEEPGRAM_API_KEY"
   finalize_wait_s: 0.6
   connect_timeout_s: 2.0
-  prerecorded_timeout_s: 30
-  prebuffer_chunks: 12  # ~12 * 64ms = 0.75s of pre-roll
+  prerecorded_timeout_s: 10
+  prebuffer_chunks: 50  # ~50 * 64ms = 3.2s of pre-roll (covers async connect time)
+  keyterm:
+    - "bash"
+    - "Claude"
   extra_query_params: {}
 
 # UI

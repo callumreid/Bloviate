@@ -149,7 +149,12 @@ class Bloviate:
         self._last_interim_update = 0.0
 
         if self.transcriber.supports_streaming():
-            self.transcriber.start_stream("dictation")
+            # Connect asynchronously so PTT press returns immediately
+            threading.Thread(
+                target=self.transcriber.start_stream,
+                args=("dictation",),
+                daemon=True,
+            ).start()
 
     def on_ptt_release(self):
         """Called when PTT is released."""
@@ -161,9 +166,15 @@ class Bloviate:
 
         self.is_recording = False
 
-        # Process recorded audio
-        if len(self.recorded_audio) > 0:
-            self.process_recording()
+        # Capture audio and process in background to keep PTT responsive
+        recorded = self.recorded_audio
+        self.recorded_audio = []
+        if len(recorded) > 0:
+            threading.Thread(
+                target=self.process_recording,
+                args=(recorded,),
+                daemon=True,
+            ).start()
         else:
             if self.transcriber.supports_streaming():
                 self.transcriber.finish_stream("dictation")
@@ -185,7 +196,11 @@ class Bloviate:
         self._last_interim_update = 0.0
 
         if self.transcriber.supports_streaming():
-            self.transcriber.start_stream("command")
+            threading.Thread(
+                target=self.transcriber.start_stream,
+                args=("command",),
+                daemon=True,
+            ).start()
 
     def on_command_release(self):
         """Called when command mode PTT is released."""
@@ -196,9 +211,15 @@ class Bloviate:
 
         self.is_command_recording = False
 
-        # Process recorded command audio
-        if len(self.recorded_command_audio) > 0:
-            self.process_command_recording()
+        # Capture audio and process in background
+        recorded = self.recorded_command_audio
+        self.recorded_command_audio = []
+        if len(recorded) > 0:
+            threading.Thread(
+                target=self.process_command_recording,
+                args=(recorded,),
+                daemon=True,
+            ).start()
         else:
             if self.transcriber.supports_streaming():
                 self.transcriber.finish_stream("command")
@@ -331,10 +352,12 @@ class Bloviate:
             )
             self.ui_window.signals.update_status.emit("Ready")
 
-    def process_command_recording(self):
+    def process_command_recording(self, recorded_chunks=None):
         """Process the recorded command audio."""
+        if recorded_chunks is None:
+            recorded_chunks = self.recorded_command_audio
         # Concatenate all recorded chunks
-        audio = np.concatenate(self.recorded_command_audio).flatten()
+        audio = np.concatenate(recorded_chunks).flatten()
 
         print(f"[CMD] Processing {len(audio)} samples ({len(audio)/self.config['audio']['sample_rate']:.2f}s)")
 
@@ -378,10 +401,12 @@ class Bloviate:
                     "unrecognized"
                 )
 
-    def process_recording(self):
+    def process_recording(self, recorded_chunks=None):
         """Process the recorded audio."""
+        if recorded_chunks is None:
+            recorded_chunks = self.recorded_audio
         # Concatenate all recorded chunks
-        audio = np.concatenate(self.recorded_audio).flatten()
+        audio = np.concatenate(recorded_chunks).flatten()
 
         print(f"Processing {len(audio)} samples ({len(audio)/self.config['audio']['sample_rate']:.2f}s)")
 
