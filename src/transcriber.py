@@ -61,10 +61,18 @@ class Transcriber:
         if self.provider == "deepgram" and DeepgramLiveSession is None:
             print("Deepgram live streaming unavailable (websocket-client not installed)")
 
-        # Load Whisper model eagerly when it's the primary provider,
-        # otherwise it will be loaded lazily on first Deepgram fallback.
+        # Load Whisper model. When Deepgram is primary, use a smaller
+        # fallback model (base.en) and pre-load it in the background so
+        # the first fallback doesn't stall on model loading.
         self.model = None
-        if self.provider == "whisper":
+        self._whisper_load_thread = None
+        if self.provider == "deepgram":
+            self.model_name = config['transcription'].get('whisper_fallback_model', 'base.en')
+            self._whisper_load_thread = threading.Thread(
+                target=self._load_whisper_model, daemon=True
+            )
+            self._whisper_load_thread.start()
+        else:
             self._load_whisper_model()
 
     def _load_custom_dictionary(self):
@@ -140,14 +148,15 @@ class Transcriber:
             result = self._transcribe_deepgram_prerecorded(audio)
             if result:
                 return result
-            # Deepgram failed — fall back to local Whisper
-            print("[Fallback] Deepgram unavailable, using local Whisper")
+            print(f"[Fallback] Deepgram unavailable, using local Whisper ({self.model_name})")
             return self._transcribe_whisper(audio)
 
         return self._transcribe_whisper(audio)
 
     def _transcribe_whisper(self, audio: np.ndarray) -> Optional[str]:
         """Transcribe with local Whisper model, loading it lazily if needed."""
+        if self.model is None and self._whisper_load_thread:
+            self._whisper_load_thread.join(timeout=30)
         if self.model is None:
             self._load_whisper_model()
         if self.model is None:
@@ -210,12 +219,15 @@ class Transcriber:
             and DeepgramLiveSession is not None
         )
 
-    def start_stream(self, mode: str) -> bool:
+    def start_stream(self, mode: str, _attempt: int = 0) -> bool:
         """Start a live streaming session for a given mode (e.g., dictation/command).
 
         Safe to call from any thread.  Sets a ready event so that
         finish_stream can wait for the connection attempt to complete.
+        Retries once on connection failure before giving up.
         """
+        max_retries = 1
+
         evt = threading.Event()
         self._stream_ready_events[mode] = evt
 
@@ -239,7 +251,11 @@ class Transcriber:
         )
 
         if not session.start():
-            print("Deepgram live connection failed")
+            if _attempt < max_retries:
+                print(f"[Deepgram] Connection failed, retrying ({_attempt + 1}/{max_retries})...")
+                time.sleep(0.3)
+                return self.start_stream(mode, _attempt=_attempt + 1)
+            print("[Deepgram] Connection failed after retry")
             evt.set()
             return False
 
@@ -278,6 +294,15 @@ class Transcriber:
             return None
 
         text = session.finish()
+
+        if not text and session.error:
+            error_type = session.error_type or "unknown"
+            close_code = session.close_code
+            detail = f"type={error_type}"
+            if close_code:
+                detail += f", close_code={close_code}"
+            print(f"[Deepgram] Stream failed ({detail}), falling back to offline transcription")
+
         if text and self.use_custom_dictionary:
             text = self._apply_custom_dictionary(text)
         return text

@@ -36,7 +36,8 @@ noise_suppression:
 # Transcription
 transcription:
   provider: "deepgram"  # whisper, deepgram
-  model: "medium.en"  # Whisper only: tiny.en, base.en, small.en, medium.en
+  model: "medium.en"  # Whisper primary: tiny.en, base.en, small.en, medium.en
+  whisper_fallback_model: "base.en"  # Faster model used when Deepgram fails
   language: "en"
   output_format: "clipboard"  # clipboard, stdout, both
   auto_paste: true  # Automatically paste after copying to clipboard
