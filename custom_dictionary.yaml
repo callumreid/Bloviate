@@ -366,6 +366,7 @@ entries:
       - "a lex a"
 
   - phrase: "LG"
+    match: "whole_word"
     variations:
       - "l g"
       - "el gee"
@@ -512,6 +513,7 @@ entries:
       - "cms"
 
   - phrase: "AI"
+    match: "whole_word"
     variations:
       - "a i"
       - "A I"
@@ -754,5 +756,22 @@ entries:
   - phrase: "Central Park"
     variations:
       - "central park"
+
+  - phrase: "fucking"
+    match: "whole_word"
+    variations:
+      - "bucking"
+
+  - phrase: "still getting"
+    variations:
+      - "stilLGetting"
+      - "stillgetting"
+      - "stilL Getting"
+
+  - phrase: "persona in"
+    variations:
+      - "personAIn"
+      - "personain"
+      - "persona In"
 
   # Add your own custom phrases below
