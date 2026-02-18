@@ -46,8 +46,8 @@ transcription:
 # Deepgram (live streaming)
 deepgram:
   streaming: true
-  model: "flux-general-en"  # Fastest. Try "nova-3" for higher accuracy if available.
-  api_version: "v2"  # Flux requires v2; remove or set v1 for older models.
+  model: "nova-3"  # Best accuracy + streaming. Use "flux-general-en" with api_version v2 if Flux is available on your plan.
+  api_version: "v1"
   prerecorded_model: "nova-3"  # Fallback model for non-streaming transcription.
   prerecorded_api_version: "v1"
   punctuate: true

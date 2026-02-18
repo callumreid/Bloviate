@@ -102,12 +102,12 @@ class DeepgramLiveSession:
     def _on_error(self, _ws, error):
         err_str = str(error)
         if "opcode=8" in err_str:
-            # WebSocket close frame received — server dropped the connection
-            self._error = "server_close"
+            # WebSocket close frame received — server dropped the connection.
+            # Preserve the raw error for diagnostics (may contain close code/reason).
+            self._error = err_str
             self._error_type = "server_close"
             if not self._finalize_sent:
-                self.log("[Deepgram] Server closed connection mid-stream (possible rate limit or session timeout)")
-            # else: expected close after finalize, don't log as error
+                self.log(f"[Deepgram] Server closed connection mid-stream: {err_str}")
         elif isinstance(error, ConnectionRefusedError):
             self._error = err_str
             self._error_type = "network_error"
