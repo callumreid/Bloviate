@@ -6,6 +6,7 @@ Main application entry point.
 """
 
 import argparse
+import os
 import yaml
 import sys
 import threading
@@ -14,6 +15,24 @@ import re
 import numpy as np
 from pathlib import Path
 from typing import Optional
+
+
+def _load_dotenv(path: Optional[Path] = None):
+    """Load KEY=VALUE pairs from a .env file into os.environ."""
+    if path is None:
+        path = Path(__file__).resolve().parent.parent / ".env"
+    if not path.is_file():
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = value
 
 from audio_capture import AudioCapture
 from noise_suppressor import NoiseSuppressor
@@ -623,6 +642,7 @@ class Bloviate:
 
 def main():
     """Main entry point."""
+    _load_dotenv()
     parser = argparse.ArgumentParser(description="Bloviate - Voice dictation with fingerprinting")
     parser.add_argument(
         '--enroll',
@@ -650,7 +670,6 @@ def main():
 
     # Change to project directory
     project_dir = Path(__file__).parent.parent
-    import os
     os.chdir(project_dir)
 
     app = Bloviate(config_path=args.config, voice_mode_override=args.voice_mode)

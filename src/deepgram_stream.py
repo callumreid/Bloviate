@@ -189,6 +189,9 @@ class DeepgramLiveSession:
         if not self._connected.is_set():
             return
 
+        peak = float(np.max(np.abs(audio)))
+        if peak > 1e-8:
+            audio = audio * (0.8 / peak)
         audio_int16 = np.clip(audio * 32768, -32768, 32767).astype(np.int16)
         self._send_queue.put(audio_int16.tobytes())
 

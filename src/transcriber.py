@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -72,6 +73,7 @@ class Transcriber:
                 target=self._load_whisper_model, daemon=True
             )
             self._whisper_load_thread.start()
+            self._validate_deepgram_key()
         else:
             self._load_whisper_model()
 
@@ -291,6 +293,7 @@ class Transcriber:
         session = self._streams.pop(mode, None)
         if not session:
             self._pending_audio.pop(mode, None)
+            print(f"[Deepgram] No active stream for '{mode}' (connection may have failed)")
             return None
 
         text = session.finish()
@@ -302,6 +305,8 @@ class Transcriber:
             if close_code:
                 detail += f", close_code={close_code}"
             print(f"[Deepgram] Stream failed ({detail}), falling back to offline transcription")
+        elif not text:
+            print(f"[Deepgram] Stream returned empty transcript (no speech detected by Deepgram)")
 
         if text and self.use_custom_dictionary:
             text = self._apply_custom_dictionary(text)
@@ -320,6 +325,38 @@ class Transcriber:
             return key
         env_name = self.deepgram_config.get("api_key_env", "DEEPGRAM_API_KEY")
         return os.getenv(env_name)
+
+    def _validate_deepgram_key(self):
+        """Check the Deepgram API key at startup so failures are obvious."""
+        api_key = self._get_deepgram_api_key()
+        if not api_key:
+            env_name = self.deepgram_config.get("api_key_env", "DEEPGRAM_API_KEY")
+            print(
+                f"[Deepgram] WARNING: No API key found. "
+                f"Set {env_name} in your environment (e.g. ~/.zshrc)."
+            )
+            return
+
+        url = "https://api.deepgram.com/v1/projects"
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": f"Token {api_key}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                resp.read()
+            print("[Deepgram] API key verified")
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                print(
+                    f"[Deepgram] ERROR: API key rejected (HTTP {exc.code}). "
+                    f"The key may be revoked or expired — generate a new one "
+                    f"at https://console.deepgram.com and set DEEPGRAM_API_KEY."
+                )
+            else:
+                print(f"[Deepgram] WARNING: Key validation returned HTTP {exc.code}")
+        except Exception as exc:
+            print(f"[Deepgram] WARNING: Could not validate API key ({exc})")
 
     def _build_deepgram_live_url(self) -> str:
         api_version = self._deepgram_api_version(for_streaming=True)
@@ -441,6 +478,15 @@ class Transcriber:
 
         return params
 
+    @staticmethod
+    def _normalize_audio_for_int16(audio: np.ndarray, target_peak: float = 0.8) -> np.ndarray:
+        """Scale audio so its peak uses the int16 range instead of quantizing to zeros."""
+        peak = float(np.max(np.abs(audio)))
+        if peak < 1e-8:
+            return audio
+        gain = target_peak / peak
+        return audio * gain
+
     def _transcribe_deepgram_prerecorded(self, audio: np.ndarray) -> Optional[str]:
         api_key = self._get_deepgram_api_key()
         if not api_key:
@@ -453,6 +499,7 @@ class Transcriber:
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
 
+        audio = self._normalize_audio_for_int16(audio)
         audio_int16 = np.clip(audio * 32768, -32768, 32767).astype(np.int16)
         audio_bytes = audio_int16.tobytes()
 
@@ -472,25 +519,54 @@ class Transcriber:
 
         req = urllib.request.Request(url, data=audio_bytes, headers=headers, method="POST")
 
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        print(f"[Deepgram] Sending {len(audio_bytes)} bytes, {len(audio)/self.sample_rate:.2f}s, RMS={rms:.6f}")
+
         try:
             timeout_s = float(self.deepgram_config.get("prerecorded_timeout_s", 30))
             with urllib.request.urlopen(req, timeout=timeout_s) as response:
                 payload = json.loads(response.read().decode("utf-8"))
 
+            metadata = payload.get("metadata", {})
+            duration = metadata.get("duration", "?")
+            model = metadata.get("model_info", {})
+            model_name = next(iter(model.values()), {}).get("name", "?") if model else "?"
+            print(f"[Deepgram] Response: duration={duration}s, model={model_name}")
+
             channel = payload.get("results", {}).get("channels", [])
             if not channel:
+                print(f"[Deepgram] Prerecorded returned no channels: {json.dumps(payload)[:500]}")
                 return None
             alternatives = channel[0].get("alternatives", [])
             if not alternatives:
+                print("[Deepgram] Prerecorded returned no alternatives")
                 return None
             text = alternatives[0].get("transcript", "").strip()
             if not text:
+                print(f"[Deepgram] Prerecorded returned empty transcript (confidence={alternatives[0].get('confidence', '?')})")
                 return None
             if self.use_custom_dictionary:
                 text = self._apply_custom_dictionary(text)
             return text
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            if exc.code in (401, 403):
+                print(
+                    f"[Deepgram] Auth failed (HTTP {exc.code}) — "
+                    f"API key is likely revoked or expired. "
+                    f"Generate a new key at https://console.deepgram.com"
+                )
+            elif exc.code == 429:
+                print(f"[Deepgram] Rate limited (HTTP 429). {body}")
+            else:
+                print(f"[Deepgram] HTTP error {exc.code}: {body}")
+            return None
         except Exception as exc:
-            print(f"Deepgram transcription error: {exc}")
+            print(f"[Deepgram] Transcription error: {exc}")
             return None
 
     def output_text(self, text: str):

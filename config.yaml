@@ -56,7 +56,7 @@ deepgram:
   endpointing: 300  # ms of silence before finalizing
   eot_timeout_ms: 800  # v2 end-of-transcript timeout; uses endpointing if unset.
   no_delay: true
-  api_key: "86f29b846a3ab6004b8f9142f478ddcbc5c00b13"
+  # Set your API key via environment variable: export DEEPGRAM_API_KEY="your-key"
   api_key_env: "DEEPGRAM_API_KEY"
   finalize_wait_s: 0.6
   connect_timeout_s: 2.0
