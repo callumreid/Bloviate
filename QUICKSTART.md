@@ -129,29 +129,37 @@ transcription:
 - `small.en` - More accurate, slower
 - `medium.en` - Most accurate, slowest
 
-### Use Deepgram for Low-Latency Dictation
-Set your API key in the environment and switch the provider in `config.yaml`.
+### Quality-First Hybrid Dictation (Recommended)
+Use streaming for live feedback and accuracy-first providers for final text.
 
 ```bash
 export DEEPGRAM_API_KEY="your_key_here"
+export OPENAI_API_KEY="your_openai_key_here"
 ```
 
 ```yaml
 transcription:
   provider: "deepgram"
+  final_pass: "hybrid"
+  final_pass_provider_priority:
+    - "openai"
+    - "deepgram"
+    - "whisper"
 
 deepgram:
   streaming: true
-  model: "flux-general-en"  # Fastest; try "nova-3" for higher accuracy
-  endpointing: 300  # Lower = faster finalization
-  eot_timeout_ms: 800  # v2 Flux end-of-transcript timeout
-  smart_format: false  # Disable to reduce delay
+  model: "nova-3"
+  prerecorded_model: "nova-3"
+  smart_format: true
   no_delay: true
+
+openai:
+  model: "gpt-4o-transcribe"
 ```
 
 Notes:
-- Streaming sends audio while you hold PTT, so release-to-text is much faster.
-- If you see errors about the model name, switch to a Deepgram model available on your account.
+- Streaming sends audio while you hold PTT for low-latency interim text.
+- Final text runs through provider priority order, so OpenAI can win accuracy while Deepgram/Whisper remain fallback.
 
 ### Adjust Noise Suppression
 ```yaml

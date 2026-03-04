@@ -6,6 +6,7 @@ A voice-fingerprinting dictation tool designed for whispering in noisy environme
 
 - **Voice Fingerprinting**: Only transcribes audio matching your voice signature
 - **Noise Suppression**: Filters out background speech and noise
+- **Hybrid Final Pass**: Uses low-latency streaming plus accuracy-first final transcription
 - **Push-to-Talk**: Global keyboard shortcut to activate listening
 - **Real-time Feedback**: Visual display of audio levels and voice detection
 - **Scarlett Integration**: Optimized for Scarlett 4i4 audio interface
@@ -49,6 +50,7 @@ Edit `config.yaml` to customize:
 - Audio device selection
 - Voice matching threshold
 - Noise suppression levels
+- Final-pass provider order (`openai` / `deepgram` / `whisper`)
 
 ## How It Works
 

@@ -7,8 +7,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
-import time
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, Callable, List
 
 import numpy as np
 import websocket
@@ -42,6 +41,7 @@ class DeepgramLiveSession:
         *,
         finalize_wait_s: float = 0.6,
         connect_timeout_s: float = 2.0,
+        stream_gain: Optional[dict] = None,
         log: Optional[Callable[[str], None]] = None,
     ):
         self.api_key = api_key
@@ -67,6 +67,49 @@ class DeepgramLiveSession:
         self._close_code: Optional[int] = None
         self._finalize_sent = False
         self._got_final_after_finalize = threading.Event()
+
+        gain_cfg = stream_gain if isinstance(stream_gain, dict) else {}
+        self._stream_gain_enabled = bool(gain_cfg.get("enabled", True))
+        self._stream_gain_target_rms = float(gain_cfg.get("target_rms", 0.035))
+        self._stream_gain_noise_floor_rms = float(gain_cfg.get("noise_floor_rms", 5e-7))
+        self._stream_gain_peak_ceiling = float(gain_cfg.get("peak_ceiling", 0.95))
+        self._stream_gain_attack = float(gain_cfg.get("attack", 0.2))
+        self._stream_gain_release = float(gain_cfg.get("release", 0.5))
+
+        max_gain_db = float(gain_cfg.get("max_gain_db", 42.0))
+        min_gain_db = float(gain_cfg.get("min_gain_db", -8.0))
+        self._stream_gain_max = float(10 ** (max_gain_db / 20.0))
+        self._stream_gain_min = float(10 ** (min_gain_db / 20.0))
+        self._stream_gain = 1.0
+
+        # Keep smoothing values sane even when config is edited manually.
+        self._stream_gain_attack = min(max(self._stream_gain_attack, 0.01), 1.0)
+        self._stream_gain_release = min(max(self._stream_gain_release, 0.01), 1.0)
+
+    def _prepare_audio_for_int16(self, audio: np.ndarray) -> np.ndarray:
+        """Apply capped RMS gain so whisper chunks are boosted without noise pumping."""
+        if audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+
+        if not self._stream_gain_enabled:
+            return audio
+
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        if rms <= self._stream_gain_noise_floor_rms:
+            desired_gain = 1.0
+        else:
+            desired_gain = self._stream_gain_target_rms / max(rms, 1e-12)
+
+        desired_gain = min(max(desired_gain, self._stream_gain_min), self._stream_gain_max)
+        alpha = self._stream_gain_attack if desired_gain > self._stream_gain else self._stream_gain_release
+        self._stream_gain = ((1.0 - alpha) * self._stream_gain) + (alpha * desired_gain)
+
+        adjusted = audio * self._stream_gain
+        peak = float(np.max(np.abs(adjusted)))
+        if peak > self._stream_gain_peak_ceiling > 0:
+            adjusted = adjusted * (self._stream_gain_peak_ceiling / peak)
+
+        return adjusted
 
     def _on_open(self, _ws):
         self._connected.set()
@@ -189,9 +232,7 @@ class DeepgramLiveSession:
         if not self._connected.is_set():
             return
 
-        peak = float(np.max(np.abs(audio)))
-        if peak > 1e-8:
-            audio = audio * (0.8 / peak)
+        audio = self._prepare_audio_for_int16(audio)
         audio_int16 = np.clip(audio * 32768, -32768, 32767).astype(np.int16)
         self._send_queue.put(audio_int16.tobytes())
 

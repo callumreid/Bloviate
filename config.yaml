@@ -22,22 +22,28 @@ window_management:
 voice_fingerprint:
   enabled: true
   mode: "whisper"  # whisper (verify) or talk (bypass verification)
-  threshold: 0.65  # 0-1, higher = stricter matching
+  threshold: 0.70  # 0-1, higher = stricter matching (raise to reject cross-talk)
+  verify_on_raw_audio: true  # Preserve speaker cues by verifying before denoise
   embedding_model: "speechbrain/spkrec-ecapa-voxceleb"
-  min_enrollment_samples: 5
+  min_enrollment_samples: 8  # More enrollment samples improve separation in noisy rooms
 
 # Noise Suppression
 noise_suppression:
   enabled: true
-  stationary_noise_reduction: 0.8  # 0-1
+  stationary_noise_reduction: 0.7  # 0-1 (aggressive enough for noise, safer for ASR detail)
   vad_aggressiveness: 3  # 0-3, higher = more aggressive
   spectral_gate_threshold: 0.03
 
 # Transcription
 transcription:
-  provider: "deepgram"  # whisper, deepgram
+  provider: "deepgram"  # whisper, deepgram, openai
   model: "medium.en"  # Whisper primary: tiny.en, base.en, small.en, medium.en
-  whisper_fallback_model: "base.en"  # Faster model used when Deepgram fails
+  whisper_fallback_model: "medium.en"  # Accuracy-first local fallback
+  final_pass: "hybrid"  # hybrid=streaming interim + prerecorded final for best accuracy
+  final_pass_provider_priority:  # Try providers in this order for final text
+    - "openai"
+    - "deepgram"
+    - "whisper"
   language: "en"
   output_format: "clipboard"  # clipboard, stdout, both
   auto_paste: true  # Automatically paste after copying to clipboard
@@ -48,24 +54,52 @@ deepgram:
   streaming: true
   model: "nova-3"  # Best accuracy + streaming. Use "flux-general-en" with api_version v2 if Flux is available on your plan.
   api_version: "v1"
-  prerecorded_model: "nova-3"  # Fallback model for non-streaming transcription.
+  prerecorded_model: "nova-3"  # Accuracy-first final pass model.
   prerecorded_api_version: "v1"
   punctuate: true
-  smart_format: false
+  smart_format: true
   interim_results: true
   endpointing: 300  # ms of silence before finalizing
   eot_timeout_ms: 800  # v2 end-of-transcript timeout; uses endpointing if unset.
   no_delay: true
   # Set your API key via environment variable: export DEEPGRAM_API_KEY="your-key"
   api_key_env: "DEEPGRAM_API_KEY"
-  finalize_wait_s: 0.6
+  finalize_wait_s: 1.0
   connect_timeout_s: 2.0
   prerecorded_timeout_s: 10
   prebuffer_chunks: 50  # ~50 * 64ms = 3.2s of pre-roll (covers async connect time)
+  include_dictionary_keyterms: true
+  max_keyterms: 100
+  keyword_boost: 3.0
+  stream_gain:
+    enabled: true
+    target_rms: 0.035
+    noise_floor_rms: 0.0000005
+    max_gain_db: 42.0
+    min_gain_db: -8.0
+    attack: 0.2
+    release: 0.5
+    peak_ceiling: 0.95
+  prerecorded_target_rms: 0.05
+  prerecorded_noise_floor_rms: 0.0000005
+  prerecorded_max_gain_db: 45.0
+  prerecorded_min_gain_db: -8.0
+  prerecorded_peak_ceiling: 0.95
   keyterm:
     - "bash"
     - "Claude"
   extra_query_params: {}
+
+# OpenAI speech-to-text (accuracy-first final pass)
+openai:
+  model: "gpt-4o-transcribe"
+  # Set your API key via environment variable: export OPENAI_API_KEY="your-key"
+  api_key_env: "OPENAI_API_KEY"
+  base_url: "https://api.openai.com/v1"
+  timeout_s: 30
+  response_format: "json"
+  temperature: 0
+  prompt: ""
 
 # UI
 ui:

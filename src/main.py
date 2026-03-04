@@ -425,24 +425,29 @@ class Bloviate:
         if recorded_chunks is None:
             recorded_chunks = self.recorded_audio
         # Concatenate all recorded chunks
-        audio = np.concatenate(recorded_chunks).flatten()
+        raw_audio = np.concatenate(recorded_chunks).flatten()
 
-        print(f"Processing {len(audio)} samples ({len(audio)/self.config['audio']['sample_rate']:.2f}s)")
+        print(f"Processing {len(raw_audio)} samples ({len(raw_audio)/self.config['audio']['sample_rate']:.2f}s)")
 
         # Finalize streaming (if enabled) before running heavy processing
         stream_text = None
         if self.transcriber.supports_streaming():
             stream_text = self.transcriber.finish_stream("dictation")
 
-        # Apply noise suppression for fingerprinting/transcription
-        audio = self.noise_suppressor.process(audio)
+        # Keep a denoised path for transcription and an optional raw path for
+        # speaker verification (noise suppression can blur speaker identity).
+        audio_for_transcription = self.noise_suppressor.process(raw_audio)
+        verify_on_raw = bool(
+            self.config.get("voice_fingerprint", {}).get("verify_on_raw_audio", True)
+        )
+        audio_for_verification = raw_audio if verify_on_raw else audio_for_transcription
 
         # Verify speaker (or bypass in talk mode)
         if self.talk_mode:
             is_match, similarity = True, -1.0
             print("Voice match: bypassed (talk mode)")
         else:
-            is_match, similarity = self.voice_fingerprint.verify_speaker(audio)
+            is_match, similarity = self.voice_fingerprint.verify_speaker(audio_for_verification)
             print(f"Voice match: {is_match} (similarity: {similarity:.3f})")
 
         if self.ui_window:
@@ -458,7 +463,35 @@ class Bloviate:
         if self.ui_window:
             self.ui_window.signals.update_status.emit("Transcribing...")
 
-        text = stream_text or self.transcriber.transcribe(audio)
+        transcription_cfg = self.config.get("transcription", {})
+        final_pass_mode = str(transcription_cfg.get("final_pass", "hybrid")).strip().lower()
+        if final_pass_mode not in {"hybrid", "prerecorded", "streaming"}:
+            print(f"Unknown transcription.final_pass '{final_pass_mode}', defaulting to hybrid")
+            final_pass_mode = "hybrid"
+
+        final_provider_order = self.transcriber.get_final_pass_provider_priority()
+        text = None
+        if final_pass_mode == "streaming":
+            text = stream_text
+            if not text:
+                print("[Final] Streaming transcript unavailable, trying final-pass providers")
+                text, provider_used = self.transcriber.transcribe_with_priority(
+                    audio_for_transcription, final_provider_order
+                )
+                if provider_used:
+                    print(f"[Final] Used provider: {provider_used}")
+        else:
+            final_text, provider_used = self.transcriber.transcribe_with_priority(
+                audio_for_transcription, final_provider_order
+            )
+            if final_text:
+                text = final_text
+                if provider_used:
+                    print(f"[Final] Used provider: {provider_used}")
+                if final_pass_mode == "hybrid" and stream_text and stream_text != final_text:
+                    print("[Final] Using higher-accuracy final pass instead of streaming text")
+            elif final_pass_mode == "hybrid":
+                text = stream_text
 
         if text:
             print(f"✓ Transcribed: {text}")

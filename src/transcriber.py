@@ -1,9 +1,10 @@
 """
 Speech-to-text transcription module for Bloviate.
-Handles audio transcription using Whisper or Deepgram.
+Handles audio transcription using Whisper, Deepgram, or OpenAI.
 """
 
 import json
+import io
 import os
 import re
 import subprocess
@@ -13,8 +14,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import wave
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Tuple
 
 import numpy as np
 import yaml
@@ -31,7 +33,9 @@ class Transcriber:
 
     def __init__(self, config: dict):
         self.config = config
-        self.provider = str(config['transcription'].get('provider', 'whisper')).lower()
+        self.provider = self._normalize_provider_name(
+            config['transcription'].get('provider', 'whisper')
+        ) or "whisper"
         self.model_name = config['transcription'].get('model', 'base.en')
         self.language = config['transcription']['language']
         self.output_format = config['transcription']['output_format']
@@ -39,9 +43,12 @@ class Transcriber:
         self.auto_paste = config['transcription'].get('auto_paste', True)
         self.use_custom_dictionary = config['transcription'].get('use_custom_dictionary', True)
         self.deepgram_config = config.get('deepgram', {})
+        self.openai_config = config.get("openai", {})
         self.deepgram_streaming = bool(self.deepgram_config.get('streaming', True))
         self._pending_audio = {}
         self._prebuffer_chunks = int(self.deepgram_config.get("prebuffer_chunks", 12))
+        self._deepgram_max_keyterms = int(self.deepgram_config.get("max_keyterms", 80))
+        self._openai_key_missing_warned = False
 
         # Keyboard controller for auto-paste
         self.keyboard = Controller()
@@ -51,16 +58,23 @@ class Transcriber:
         if self.use_custom_dictionary:
             self._load_custom_dictionary()
 
+        self._deepgram_bias_terms = self._build_deepgram_bias_terms()
+        if self.provider == "deepgram" and self._deepgram_bias_terms:
+            print(f"[Deepgram] Loaded {len(self._deepgram_bias_terms)} bias terms")
+
         # Track active Deepgram streams by mode name
         self._streams = {}
         self._stream_ready_events = {}  # mode -> threading.Event
 
-        if self.provider not in {"whisper", "deepgram"}:
+        if self.provider not in {"whisper", "deepgram", "openai"}:
             print(f"Unknown transcription provider '{self.provider}', defaulting to whisper")
             self.provider = "whisper"
 
         if self.provider == "deepgram" and DeepgramLiveSession is None:
             print("Deepgram live streaming unavailable (websocket-client not installed)")
+        if self.provider == "openai" and not self._get_openai_api_key():
+            env_name = self.openai_config.get("api_key_env", "OPENAI_API_KEY")
+            print(f"[OpenAI] WARNING: No API key found. Set {env_name} to enable OpenAI STT.")
 
         # Load Whisper model. When Deepgram is primary, use a smaller
         # fallback model (base.en) and pre-load it in the background so
@@ -74,8 +88,56 @@ class Transcriber:
             )
             self._whisper_load_thread.start()
             self._validate_deepgram_key()
+        elif self.provider == "openai":
+            # Keep a local fallback model warm when OpenAI is primary.
+            self.model_name = config['transcription'].get('whisper_fallback_model', 'base.en')
+            self._whisper_load_thread = threading.Thread(
+                target=self._load_whisper_model, daemon=True
+            )
+            self._whisper_load_thread.start()
         else:
             self._load_whisper_model()
+
+    @staticmethod
+    def _normalize_provider_name(provider: Optional[str]) -> Optional[str]:
+        if provider is None:
+            return None
+
+        value = str(provider).strip().lower()
+        aliases = {
+            "local": "whisper",
+            "local_whisper": "whisper",
+            "openai-stt": "openai",
+            "openai_transcribe": "openai",
+        }
+        return aliases.get(value, value)
+
+    def get_final_pass_provider_priority(self) -> List[str]:
+        """Resolve final-pass provider order from config with sensible defaults."""
+        configured = self.config.get("transcription", {}).get("final_pass_provider_priority")
+        providers: List[str] = []
+
+        if isinstance(configured, str):
+            configured = [item.strip() for item in configured.split(",")]
+
+        if isinstance(configured, list):
+            seen = set()
+            for item in configured:
+                normalized = self._normalize_provider_name(item)
+                if not normalized or normalized in seen:
+                    continue
+                if normalized in {"whisper", "deepgram", "openai"}:
+                    providers.append(normalized)
+                    seen.add(normalized)
+
+        if providers:
+            return providers
+
+        if self.provider == "openai":
+            return ["openai", "deepgram", "whisper"]
+        if self.provider == "deepgram":
+            return ["deepgram", "whisper"]
+        return ["whisper"]
 
     def _load_custom_dictionary(self):
         """Load custom dictionary from YAML file."""
@@ -144,7 +206,7 @@ class Transcriber:
         """
         Transcribe audio to text.
 
-        Falls back to local Whisper automatically when Deepgram is unreachable.
+        Falls back to local Whisper automatically when the configured provider fails.
         """
         if self.provider == "deepgram":
             result = self._transcribe_deepgram_prerecorded(audio)
@@ -152,8 +214,44 @@ class Transcriber:
                 return result
             print(f"[Fallback] Deepgram unavailable, using local Whisper ({self.model_name})")
             return self._transcribe_whisper(audio)
+        if self.provider == "openai":
+            result = self._transcribe_openai(audio)
+            if result:
+                return result
+            print(f"[Fallback] OpenAI unavailable, using local Whisper ({self.model_name})")
+            return self._transcribe_whisper(audio)
 
         return self._transcribe_whisper(audio)
+
+    def transcribe_with_provider(self, provider: str, audio: np.ndarray) -> Optional[str]:
+        """Transcribe with an explicit provider, without cross-provider fallback."""
+        normalized = self._normalize_provider_name(provider)
+        if normalized == "deepgram":
+            return self._transcribe_deepgram_prerecorded(audio)
+        if normalized == "openai":
+            return self._transcribe_openai(audio)
+        if normalized == "whisper":
+            return self._transcribe_whisper(audio)
+        return None
+
+    def transcribe_with_priority(
+        self, audio: np.ndarray, providers: List[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Try providers in order and return (text, provider_used)."""
+        for provider in providers:
+            normalized = self._normalize_provider_name(provider)
+            if normalized not in {"whisper", "deepgram", "openai"}:
+                continue
+            if normalized == "openai" and not self._get_openai_api_key():
+                if not self._openai_key_missing_warned:
+                    env_name = self.openai_config.get("api_key_env", "OPENAI_API_KEY")
+                    print(f"[OpenAI] Skipping provider (missing key: {env_name})")
+                    self._openai_key_missing_warned = True
+                continue
+            text = self.transcribe_with_provider(normalized, audio)
+            if text:
+                return text, normalized
+        return None, None
 
     def _transcribe_whisper(self, audio: np.ndarray) -> Optional[str]:
         """Transcribe with local Whisper model, loading it lazily if needed."""
@@ -249,6 +347,7 @@ class Transcriber:
             url,
             finalize_wait_s=float(self.deepgram_config.get("finalize_wait_s", 0.6)),
             connect_timeout_s=float(self.deepgram_config.get("connect_timeout_s", 2.0)),
+            stream_gain=self.deepgram_config.get("stream_gain", {}),
             log=print,
         )
 
@@ -368,6 +467,44 @@ class Transcriber:
         query = urllib.parse.urlencode(params, doseq=True)
         return f"wss://api.deepgram.com/{api_version}/listen?{query}"
 
+    def _build_deepgram_bias_terms(self) -> List[str]:
+        """Build bias terms from config plus custom dictionary phrases."""
+        terms: List[str] = []
+        seen = set()
+
+        def _add_term(value: str):
+            term = str(value).strip()
+            if not term:
+                return
+            if len(term) > 80:
+                return
+            key = term.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            terms.append(term)
+
+        configured = self.deepgram_config.get("keyterm", [])
+        if isinstance(configured, str):
+            configured = [configured]
+        if isinstance(configured, list):
+            for term in configured:
+                _add_term(term)
+
+        if self.deepgram_config.get("include_dictionary_keyterms", True):
+            for entry in self.custom_dictionary:
+                phrase = entry.get("phrase", "")
+                _add_term(phrase)
+
+        if len(terms) > self._deepgram_max_keyterms:
+            terms = terms[:self._deepgram_max_keyterms]
+            print(
+                f"[Deepgram] Capped bias terms to {self._deepgram_max_keyterms} "
+                f"entries for request-size safety"
+            )
+
+        return terms
+
     def _deepgram_api_version(self, for_streaming: bool) -> str:
         explicit = (
             self.deepgram_config.get("api_version")
@@ -435,9 +572,8 @@ class Transcriber:
             if "mip_opt_out" in self.deepgram_config:
                 params["mip_opt_out"] = str(bool(self.deepgram_config.get("mip_opt_out"))).lower()
 
-            keyterm = self.deepgram_config.get("keyterm")
-            if keyterm:
-                params["keyterm"] = keyterm
+            if self._deepgram_bias_terms:
+                params["keyterm"] = self._deepgram_bias_terms
 
             tag = self.deepgram_config.get("tag")
             if tag:
@@ -470,6 +606,24 @@ class Transcriber:
                 if no_delay is not None:
                     params["no_delay"] = str(bool(no_delay)).lower()
 
+            model_name = str(model or "").lower()
+            use_keyterm = model_name.startswith("nova-3")
+            keywords = self.deepgram_config.get("keywords")
+            if use_keyterm:
+                if self._deepgram_bias_terms:
+                    params["keyterm"] = self._deepgram_bias_terms
+            elif keywords:
+                params["keywords"] = keywords
+            elif self._deepgram_bias_terms:
+                single_word_terms = [term for term in self._deepgram_bias_terms if " " not in term]
+                if single_word_terms:
+                    boost = self.deepgram_config.get("keyword_boost")
+                    if boost is None:
+                        params["keywords"] = single_word_terms
+                    else:
+                        boost_value = float(boost)
+                        params["keywords"] = [f"{term}:{boost_value:g}" for term in single_word_terms]
+
         extra = self.deepgram_config.get("extra_query_params", {})
         if isinstance(extra, dict):
             for key, value in extra.items():
@@ -478,14 +632,164 @@ class Transcriber:
 
         return params
 
-    @staticmethod
-    def _normalize_audio_for_int16(audio: np.ndarray, target_peak: float = 0.8) -> np.ndarray:
-        """Scale audio so its peak uses the int16 range instead of quantizing to zeros."""
-        peak = float(np.max(np.abs(audio)))
-        if peak < 1e-8:
+    def _normalize_audio_for_int16(self, audio: np.ndarray) -> np.ndarray:
+        """Apply capped RMS normalization before int16 conversion."""
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        noise_floor_rms = float(self.deepgram_config.get("prerecorded_noise_floor_rms", 5e-7))
+        if rms <= noise_floor_rms:
             return audio
-        gain = target_peak / peak
-        return audio * gain
+
+        target_rms = float(self.deepgram_config.get("prerecorded_target_rms", 0.05))
+        max_gain_db = float(self.deepgram_config.get("prerecorded_max_gain_db", 45.0))
+        min_gain_db = float(self.deepgram_config.get("prerecorded_min_gain_db", -8.0))
+        max_gain = float(10 ** (max_gain_db / 20.0))
+        min_gain = float(10 ** (min_gain_db / 20.0))
+
+        gain = target_rms / max(rms, 1e-12)
+        gain = min(max(gain, min_gain), max_gain)
+        normalized = audio * gain
+
+        peak_ceiling = float(self.deepgram_config.get("prerecorded_peak_ceiling", 0.95))
+        peak = float(np.max(np.abs(normalized)))
+        if peak > peak_ceiling > 0:
+            normalized = normalized * (peak_ceiling / peak)
+
+        return normalized
+
+    def _get_openai_api_key(self) -> Optional[str]:
+        key = self.openai_config.get("api_key")
+        if key:
+            return str(key)
+        env_name = self.openai_config.get("api_key_env", "OPENAI_API_KEY")
+        return os.getenv(env_name)
+
+    def _audio_to_wav_bytes(self, audio: np.ndarray) -> bytes:
+        """Serialize mono float audio to 16-bit PCM WAV bytes."""
+        if len(audio.shape) > 1:
+            audio = audio.squeeze()
+        if audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+
+        audio = np.clip(audio, -1.0, 1.0)
+        audio_int16 = (audio * 32767.0).astype(np.int16)
+
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(self.sample_rate)
+            wav_file.writeframes(audio_int16.tobytes())
+        return buffer.getvalue()
+
+    @staticmethod
+    def _build_multipart_form_data(
+        fields: dict, file_field: str, file_name: str, file_content: bytes, file_mime: str
+    ) -> Tuple[bytes, str]:
+        boundary = f"----bloviate{int(time.time() * 1000)}"
+        body = bytearray()
+
+        for name, value in fields.items():
+            if value is None:
+                continue
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8")
+            )
+            body.extend(str(value).encode("utf-8"))
+            body.extend(b"\r\n")
+
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(
+            f'Content-Disposition: form-data; name="{file_field}"; filename="{file_name}"\r\n'.encode(
+                "utf-8"
+            )
+        )
+        body.extend(f"Content-Type: {file_mime}\r\n\r\n".encode("utf-8"))
+        body.extend(file_content)
+        body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+
+        content_type = f"multipart/form-data; boundary={boundary}"
+        return bytes(body), content_type
+
+    def _transcribe_openai(self, audio: np.ndarray) -> Optional[str]:
+        api_key = self._get_openai_api_key()
+        if not api_key:
+            if not self._openai_key_missing_warned:
+                env_name = self.openai_config.get("api_key_env", "OPENAI_API_KEY")
+                print(f"[OpenAI] API key not set ({env_name} or config)")
+                self._openai_key_missing_warned = True
+            return None
+
+        model = str(self.openai_config.get("model", "gpt-4o-transcribe")).strip()
+        if not model:
+            model = "gpt-4o-transcribe"
+
+        wav_bytes = self._audio_to_wav_bytes(audio)
+        fields = {
+            "model": model,
+            "language": self.language,
+        }
+
+        prompt = self.openai_config.get("prompt")
+        if prompt:
+            fields["prompt"] = str(prompt)
+
+        temperature = self.openai_config.get("temperature")
+        if temperature is not None:
+            fields["temperature"] = temperature
+
+        response_format = self.openai_config.get("response_format")
+        if response_format:
+            fields["response_format"] = str(response_format)
+
+        body, content_type = self._build_multipart_form_data(
+            fields=fields,
+            file_field="file",
+            file_name="bloviate.wav",
+            file_content=wav_bytes,
+            file_mime="audio/wav",
+        )
+
+        base_url = str(self.openai_config.get("base_url", "https://api.openai.com/v1")).rstrip("/")
+        url = f"{base_url}/audio/transcriptions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": content_type,
+        }
+
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        timeout_s = float(self.openai_config.get("timeout_s", 30))
+        print(f"[OpenAI] Sending {len(wav_bytes)} bytes to model={model}")
+
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_s) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+
+            text = str(payload.get("text", "")).strip()
+            if not text:
+                print("[OpenAI] Empty transcript")
+                return None
+
+            if self.use_custom_dictionary:
+                text = self._apply_custom_dictionary(text)
+            return text
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            if exc.code in (401, 403):
+                print(f"[OpenAI] Auth failed (HTTP {exc.code}). Check OPENAI_API_KEY.")
+            elif exc.code == 429:
+                print(f"[OpenAI] Rate limited (HTTP 429): {body}")
+            else:
+                print(f"[OpenAI] HTTP error {exc.code}: {body}")
+            return None
+        except Exception as exc:
+            print(f"[OpenAI] Transcription error: {exc}")
+            return None
 
     def _transcribe_deepgram_prerecorded(self, audio: np.ndarray) -> Optional[str]:
         api_key = self._get_deepgram_api_key()
