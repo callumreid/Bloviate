@@ -387,6 +387,11 @@ entries:
       - "deep gram"
       - "deep graham"
 
+  - phrase: "ServiceNow"
+    variations:
+      - "service now"
+      - "servicenow"
+
   # Acronyms and internal terms
   - phrase: "QOTD"
     variations:

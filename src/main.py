@@ -96,60 +96,84 @@ class Bloviate:
 
     def enroll_voice(self):
         """Run voice enrollment process."""
+        n = self.voice_fingerprint.min_enrollment_samples
         print("\n=== Voice Enrollment ===")
-        print(f"You need to record {self.voice_fingerprint.min_enrollment_samples} samples of your whisper voice.")
-        print("Press Enter when ready to record each sample, then whisper a phrase.\n")
+        print(f"You'll record {n} samples. For each one:")
+        print("  1. Read the phrase shown")
+        print("  2. Press Enter — recording starts after a 1-second countdown")
+        print("  3. Say the phrase clearly at your normal speaking volume\n")
 
         self.audio_capture.start()
 
         phrases = [
-            "This is my voice for enrollment",
-            "I am enrolling my whisper voice",
-            "Bloviate should recognize my voice",
-            "Testing voice fingerprint enrollment",
-            "Final sample for voice enrollment"
+            "The quick brown fox jumps over the lazy dog",
+            "Bloviate is my voice transcription tool",
+            "I use this every day to capture my thoughts",
+            "Voice recognition works best with consistent samples",
+            "My voice has a unique signature that identifies me",
+            "Speaking clearly helps the model learn my voice",
+            "This is another sample to improve accuracy",
+            "Final enrollment phrase for voice fingerprinting",
+            "The weather today is perfect for working outside",
+            "Artificial intelligence makes transcription effortless",
         ]
 
-        for i in range(self.voice_fingerprint.min_enrollment_samples):
-            phrase = phrases[i] if i < len(phrases) else "Another enrollment sample"
+        i = 0
+        while i < n:
+            phrase = phrases[i % len(phrases)]
+            print(f"\nSample {i+1}/{n} — say this phrase:")
+            print(f"  \"{phrase}\"")
+            input("Press Enter when ready...")
 
-            input(f"\nSample {i+1}/{self.voice_fingerprint.min_enrollment_samples}")
-            print(f"Please whisper: '{phrase}'")
-            print("Recording for 3 seconds...")
+            # 1-second countdown so they're not caught off guard
+            for countdown in range(1, 0, -1):
+                print(f"  Starting in {countdown}...", end="\r")
+                time.sleep(1)
+            print("  Recording...          ", end="\r")
 
-            # Record for 3 seconds
+            # Record for 3 seconds with live countdown
             samples = []
             start_time = time.time()
-            while time.time() - start_time < 3.0:
-                chunk = self.audio_capture.get_audio_chunk(timeout=0.5)
+            duration = 3.0
+            while True:
+                elapsed = time.time() - start_time
+                remaining = duration - elapsed
+                if remaining <= 0:
+                    break
+                print(f"  Recording... {remaining:.1f}s remaining  ", end="\r")
+                chunk = self.audio_capture.get_audio_chunk(timeout=0.1)
                 if chunk is not None:
                     samples.append(chunk)
+            print("  Done.                          ")
 
             if len(samples) == 0:
-                print("No audio captured. Please try again.")
+                print("  No audio captured — check your microphone and try again.")
                 continue
 
-            # Concatenate audio
             audio = np.concatenate(samples).flatten()
 
-            # Apply noise suppression
-            audio = self.noise_suppressor.process(audio)
+            # Warn if audio is too quiet
+            rms = float(np.sqrt(np.mean(audio ** 2)))
+            if rms < 0.01:
+                print(f"  Audio level very low (RMS={rms:.4f}) — speak louder or move closer to the mic.")
+                retry = input("  Retry this sample? [Y/n]: ").strip().lower()
+                if retry != "n":
+                    continue
 
-            # Enroll sample
+            audio = self.noise_suppressor.process(audio)
             success = self.voice_fingerprint.enroll_sample(audio)
 
             if success:
-                print(f"✓ Sample {i+1} enrolled successfully")
+                print(f"  ✓ Sample {i+1} enrolled (RMS={rms:.4f})")
+                i += 1
             else:
-                print(f"✗ Failed to enroll sample {i+1}")
+                print(f"  ✗ Failed to enroll — retrying")
 
         self.audio_capture.stop()
 
-        # Save profile
         if self.voice_fingerprint.is_enrolled():
             self.voice_fingerprint.save_profile()
-            print("\n✓ Voice enrollment complete!")
-            print("You can now run Bloviate normally.")
+            print("\n✓ Voice enrollment complete! You can now run Bloviate normally.")
         else:
             print("\n✗ Voice enrollment failed. Please try again.")
 
