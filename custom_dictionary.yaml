@@ -392,6 +392,68 @@ entries:
       - "service now"
       - "servicenow"
 
+  - phrase: "ElevenLabs"
+    variations:
+      - "eleven labs"
+      - "elevenlabs"
+
+  - phrase: "Telnyx"
+    variations:
+      - "tell nix"
+      - "tel nicks"
+      - "telnix"
+
+  - phrase: "Ollama"
+    variations:
+      - "oh llama"
+      - "a llama"
+      - "ollama"
+
+  - phrase: "Wispr"
+    variations:
+      - "whisper"
+      - "wis per"
+      - "wisper"
+
+  - phrase: "ngrok"
+    variations:
+      - "en grok"
+      - "and rock"
+      - "n grok"
+
+  - phrase: "Hanko"
+    variations:
+      - "hankow"
+      - "han co"
+
+  - phrase: "Anthropic"
+    variations:
+      - "an thropic"
+      - "anthro pic"
+      - "anthropic"
+
+  - phrase: "Fleetworks"
+    variations:
+      - "fleet works"
+      - "fleetworks"
+
+  - phrase: "Jackbox"
+    variations:
+      - "jack box"
+      - "jackbox"
+
+  - phrase: "WebRTC"
+    variations:
+      - "web r t c"
+      - "web rtc"
+      - "web r t see"
+
+  - phrase: "DK Bananza"
+    variations:
+      - "DK Bonanza"
+      - "dk bananza"
+      - "dk bonanza"
+
   # Acronyms and internal terms
   - phrase: "QOTD"
     variations:
@@ -522,6 +584,47 @@ entries:
     variations:
       - "a i"
       - "A I"
+
+  - phrase: "ASR"
+    variations:
+      - "a s r"
+      - "A S R"
+
+  - phrase: "TTS"
+    variations:
+      - "t t s"
+      - "T T S"
+
+  - phrase: "STT"
+    variations:
+      - "s t t"
+      - "S T T"
+
+  - phrase: "VAD"
+    variations:
+      - "v a d"
+      - "V A D"
+
+  - phrase: "IVR"
+    variations:
+      - "i v r"
+      - "I V R"
+
+  - phrase: "PSTN"
+    variations:
+      - "p s t n"
+      - "P S T N"
+
+  - phrase: "SIP"
+    match: "whole_word"
+    variations:
+      - "s i p"
+      - "S I P"
+
+  - phrase: "LLM"
+    variations:
+      - "l l m"
+      - "L L M"
 
   # People and places
   - phrase: "Dana Dzik"
@@ -783,5 +886,84 @@ entries:
     match: "whole_word"
     variations:
       - "reed"
+
+  - phrase: "Brooke Hopkins"
+    variations:
+      - "Brook Hopkins"
+      - "Brooke Hopkin"
+
+  - phrase: "Tanmay Laud"
+    variations:
+      - "Tanmay Loud"
+      - "Tan may Laud"
+      - "Tanmay Lawd"
+
+  - phrase: "Hyun Jae Moon"
+    variations:
+      - "Hyun Jay Moon"
+      - "Hyunjae Moon"
+      - "Hyun J Moon"
+
+  - phrase: "Harish Jobanputra"
+    variations:
+      - "Harris Jobanputra"
+      - "Harish Jobunputra"
+      - "Harish Joban putra"
+
+  - phrase: "Micko Cabacungan"
+    variations:
+      - "Miko Cabacungan"
+      - "Micko Cabacungun"
+      - "Micko Cabacungen"
+
+  - phrase: "Aaron Sarazan"
+    variations:
+      - "Aaron Sarasan"
+      - "Aaron Sarazen"
+      - "Aaron Sarrazan"
+
+  - phrase: "Decker Brower"
+    variations:
+      - "Decker Bower"
+      - "Decker Brauer"
+      - "Decker Brower"
+
+  - phrase: "Joash Johnson"
+    variations:
+      - "Josh Johnson"
+      - "Jo ash Johnson"
+
+  - phrase: "Zack Blunck"
+    variations:
+      - "Zack Blunk"
+      - "Zach Blunck"
+      - "Zack Blunk"
+
+  - phrase: "Dylan Shad"
+    variations:
+      - "Dylan Shadd"
+      - "Dylan Chad"
+
+  - phrase: "Dustin Lacewell"
+    variations:
+      - "Dustin Lace well"
+      - "Dustin Lacewall"
+      - "Dustin Lacewill"
+
+  - phrase: "Hayes Valley"
+    variations:
+      - "haze valley"
+      - "hayes valley"
+
+  - phrase: "Lake Merritt"
+    variations:
+      - "lake merit"
+      - "lake merrit"
+      - "lake meritt"
+
+  - phrase: "Larkspur"
+    variations:
+      - "lark spur"
+      - "larkspur"
 
   # Add your own custom phrases below
