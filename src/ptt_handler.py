@@ -5,7 +5,6 @@ Manages global keyboard shortcuts for activating dictation.
 
 from pynput import keyboard
 from typing import Callable, Optional, Dict
-import threading
 
 
 class PTTHandler:
@@ -238,11 +237,20 @@ class PTTHandler:
         else:
             print(f"PTT handler started with hotkey: {self.hotkey_str}")
 
-    def stop(self):
+    def stop(self, join_timeout: float = 1.0):
         """Stop listening for keyboard events."""
-        if self.listener:
-            self.listener.stop()
-            self.listener = None
+        listener = self.listener
+        self.listener = None
+
+        self.is_active = False
+        self.current_keys.clear()
+        self.active_hotkeys.clear()
+        for hotkey_info in self.additional_hotkeys.values():
+            hotkey_info['is_active'] = False
+
+        if listener:
+            listener.stop()
+            listener.join(timeout=join_timeout)
             print("PTT handler stopped")
 
     def wait(self):

@@ -33,3 +33,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local user data
+custom_dictionary.yaml

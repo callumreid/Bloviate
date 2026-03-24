@@ -270,6 +270,24 @@ class DeepgramLiveSession:
 
         return self.get_text()
 
+    def close(self):
+        """Abort the session without waiting for a final transcript."""
+        self._stop_event.set()
+        self._got_final_after_finalize.set()
+        self._send_queue.put(None)
+
+        if self._ws:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+
+        if self._sender_thread:
+            self._sender_thread.join(timeout=1.0)
+
+        if self._ws_thread:
+            self._ws_thread.join(timeout=1.0)
+
     def get_text(self) -> Optional[str]:
         with self._lock:
             if self._final_parts:

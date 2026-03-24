@@ -1,0 +1,15 @@
+# Custom Dictionary for Bloviate
+# Copy this file to custom_dictionary.yaml to create your local dictionary.
+# The live custom_dictionary.yaml file is gitignored and should stay local.
+#
+# Format:
+#   - phrase: "the correct text you want"
+#     variations: ["how it might be transcribed", "another variation"]
+#
+# Example:
+#   - phrase: "git checkout -b"
+#     variations:
+#       - "get check out dash b"
+#       - "git check out dash b"
+
+entries: []

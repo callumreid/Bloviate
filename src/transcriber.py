@@ -46,6 +46,8 @@ class Transcriber:
         self.openai_config = config.get("openai", {})
         self.deepgram_streaming = bool(self.deepgram_config.get('streaming', True))
         self._pending_audio = {}
+        self._stream_lock = threading.Lock()
+        self._shutting_down = False
         self._prebuffer_chunks = int(self.deepgram_config.get("prebuffer_chunks", 12))
         self._deepgram_max_keyterms = int(self.deepgram_config.get("max_keyterms", 80))
         self._openai_key_missing_warned = False
@@ -141,14 +143,14 @@ class Transcriber:
 
     def _load_custom_dictionary(self):
         """Load custom dictionary from YAML file."""
-        dict_path = Path("custom_dictionary.yaml")
+        dict_path = self._resolve_custom_dictionary_path()
 
         if not dict_path.exists():
-            print("Custom dictionary not found, skipping...")
+            print(f"Custom dictionary not found at {dict_path}, skipping...")
             return
 
         try:
-            with open(dict_path, 'r') as f:
+            with open(dict_path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
 
             if not data or 'entries' not in data:
@@ -169,10 +171,25 @@ class Transcriber:
                         'match': match_mode
                     })
 
-            print(f"Loaded {len(self.custom_dictionary)} custom dictionary entries")
+            print(f"Loaded {len(self.custom_dictionary)} custom dictionary entries from {dict_path}")
 
         except Exception as e:
-            print(f"Error loading custom dictionary: {e}")
+            print(f"Error loading custom dictionary from {dict_path}: {e}")
+
+    def _resolve_custom_dictionary_path(self) -> Path:
+        """Resolve the local custom dictionary path."""
+        raw_path = (
+            self.config.get('transcription', {}).get('custom_dictionary_path')
+            or os.getenv('BLOVIATE_CUSTOM_DICTIONARY_PATH')
+        )
+
+        if raw_path:
+            dict_path = Path(raw_path).expanduser()
+            if not dict_path.is_absolute():
+                dict_path = Path(__file__).resolve().parent.parent / dict_path
+            return dict_path
+
+        return Path(__file__).resolve().parent.parent / "custom_dictionary.yaml"
 
     def _apply_custom_dictionary(self, text: str) -> str:
         """Apply custom dictionary corrections to transcribed text."""
@@ -329,7 +346,12 @@ class Transcriber:
         max_retries = 1
 
         evt = threading.Event()
-        self._stream_ready_events[mode] = evt
+        with self._stream_lock:
+            self._stream_ready_events[mode] = evt
+
+        if self._shutting_down:
+            evt.set()
+            return False
 
         if not self.supports_streaming():
             evt.set()
@@ -360,8 +382,14 @@ class Transcriber:
             evt.set()
             return False
 
-        self._streams[mode] = session
-        pending = self._pending_audio.pop(mode, [])
+        if self._shutting_down:
+            session.close()
+            evt.set()
+            return False
+
+        with self._stream_lock:
+            self._streams[mode] = session
+            pending = self._pending_audio.pop(mode, [])
         for chunk in pending:
             session.send_audio(chunk)
         evt.set()
@@ -369,29 +397,46 @@ class Transcriber:
 
     def send_audio_chunk(self, mode: str, audio: np.ndarray):
         """Send a chunk of audio to an active live session."""
-        session = self._streams.get(mode)
+        if self._shutting_down:
+            return
+
+        with self._stream_lock:
+            session = self._streams.get(mode)
         if session:
             session.send_audio(audio)
             return
 
         # Buffer a small pre-roll so we don't lose the first syllable.
         if self.supports_streaming():
-            buffer = self._pending_audio.setdefault(mode, [])
-            buffer.append(audio.copy())
-            if len(buffer) > self._prebuffer_chunks:
-                buffer.pop(0)
+            with self._stream_lock:
+                buffer = self._pending_audio.setdefault(mode, [])
+                buffer.append(audio.copy())
+                if len(buffer) > self._prebuffer_chunks:
+                    buffer.pop(0)
 
     def finish_stream(self, mode: str) -> Optional[str]:
         """Finalize a live session and return the transcript."""
+        if self._shutting_down:
+            with self._stream_lock:
+                session = self._streams.pop(mode, None)
+                self._pending_audio.pop(mode, None)
+                self._stream_ready_events.pop(mode, None)
+            if session:
+                session.close()
+            return None
+
         # Wait for the async connection attempt to finish (if any)
-        evt = self._stream_ready_events.pop(mode, None)
+        with self._stream_lock:
+            evt = self._stream_ready_events.pop(mode, None)
         if evt:
             connect_timeout = float(self.deepgram_config.get("connect_timeout_s", 2.0))
             evt.wait(timeout=connect_timeout + 0.5)
 
-        session = self._streams.pop(mode, None)
+        with self._stream_lock:
+            session = self._streams.pop(mode, None)
         if not session:
-            self._pending_audio.pop(mode, None)
+            with self._stream_lock:
+                self._pending_audio.pop(mode, None)
             print(f"[Deepgram] No active stream for '{mode}' (connection may have failed)")
             return None
 
@@ -413,10 +458,31 @@ class Transcriber:
 
     def get_stream_interim(self, mode: str) -> Optional[str]:
         """Return interim text for an active live session, if any."""
-        session = self._streams.get(mode)
+        with self._stream_lock:
+            session = self._streams.get(mode)
         if not session:
             return None
         return session.get_interim_text()
+
+    def shutdown(self):
+        """Close any active streaming sessions and discard pending audio."""
+        self._shutting_down = True
+
+        with self._stream_lock:
+            active_streams = list(self._streams.items())
+            self._streams.clear()
+            self._pending_audio.clear()
+            ready_events = list(self._stream_ready_events.values())
+            self._stream_ready_events.clear()
+
+        for evt in ready_events:
+            evt.set()
+
+        for mode, session in active_streams:
+            try:
+                session.close()
+            except Exception as e:
+                print(f"[Deepgram] Error closing stream '{mode}': {e}")
 
     def _get_deepgram_api_key(self) -> Optional[str]:
         key = self.deepgram_config.get("api_key")

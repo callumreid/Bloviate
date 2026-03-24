@@ -32,7 +32,8 @@ class MenuBarIndicator:
         self.audio_level = 0
         self.current_state = "idle"  # idle, recording, processing, success, rejected, command_*
         self._pulse_phase = False
-        self._pulse_timer = QTimer()
+        self._closed = False
+        self._pulse_timer = QTimer(self.tray_icon)
         self._pulse_timer.setInterval(320)
         self._pulse_timer.timeout.connect(self._toggle_pulse)
 
@@ -139,6 +140,8 @@ class MenuBarIndicator:
 
     def _update_icon(self):
         """Update the menu bar icon based on current state."""
+        if self._closed:
+            return
         level_pct = self._level_pct()
         if self.current_state == "idle":
             icon = self._create_eq_icon(self.audio_level, QColor(160, 160, 160))
@@ -190,6 +193,8 @@ class MenuBarIndicator:
 
     def set_audio_level(self, level: float):
         """Update audio level display."""
+        if self._closed:
+            return
         self.audio_level = level
         if self.current_state in {"idle", "recording", "command_recording"}:
             self._update_icon()
@@ -258,11 +263,19 @@ class MenuBarIndicator:
 
     def hide(self):
         """Hide the tray icon."""
+        if self._closed:
+            return
         self.tray_icon.hide()
 
     def close(self):
         """Close and cleanup."""
+        if self._closed:
+            return
+        self._closed = True
+        self._stop_pulse()
         self.tray_icon.hide()
+        self.tray_icon.setContextMenu(None)
+        self.tray_icon.deleteLater()
 
 
 class BottomOverlayIndicator(QWidget):
@@ -412,6 +425,8 @@ class BottomOverlayIndicator(QWidget):
 
     def close(self):
         """Permanently close the overlay and stop all timers."""
+        if self._closed:
+            return
         self._closed = True
         self._visibility_timer.stop()
         self._pulse_timer.stop()
@@ -563,6 +578,7 @@ class BloviateUI(QMainWindow):
         super().__init__()
         self.config = config
         self.signals = UISignals()
+        self._closing = False
 
         # Create menu bar indicator if enabled
         self.menu_bar_indicator = None
@@ -856,6 +872,10 @@ class BloviateUI(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close event."""
+        if self._closing:
+            super().closeEvent(event)
+            return
+        self._closing = True
         # Clean up menu bar indicator
         if self.menu_bar_indicator:
             self.menu_bar_indicator.close()

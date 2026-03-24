@@ -75,9 +75,52 @@ class Bloviate:
         self.ui_app = None
         self._last_interim_text = ""
         self._last_interim_update = 0.0
+        self._shutdown_event = threading.Event()
+        self._worker_threads = set()
+        self._worker_threads_lock = threading.Lock()
         self._interim_update_interval_s = float(
             self.config.get("ui", {}).get("interim_update_interval_s", 0.15)
         )
+
+    def _start_worker(self, target, *args):
+        """Start a background worker and track it for shutdown."""
+        if self._shutdown_event.is_set():
+            return None
+
+        def runner():
+            try:
+                target(*args)
+            except Exception as e:
+                print(f"Worker error in {getattr(target, '__name__', 'background task')}: {e}")
+            finally:
+                with self._worker_threads_lock:
+                    self._worker_threads.discard(threading.current_thread())
+
+        thread = threading.Thread(
+            target=runner,
+            daemon=True,
+            name=f"bloviate-{getattr(target, '__name__', 'worker')}",
+        )
+        with self._worker_threads_lock:
+            self._worker_threads.add(thread)
+        thread.start()
+        return thread
+
+    def _join_workers(self, timeout: float = 3.0):
+        """Wait briefly for background workers to finish."""
+        deadline = time.time() + timeout
+        while True:
+            with self._worker_threads_lock:
+                threads = [thread for thread in self._worker_threads if thread.is_alive()]
+            if not threads:
+                return
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                alive = ", ".join(thread.name for thread in threads)
+                print(f"Shutdown timed out waiting for workers: {alive}")
+                return
+            for thread in threads:
+                thread.join(timeout=min(0.25, remaining))
 
     def _resolve_voice_mode(self, override: Optional[str] = None) -> str:
         """Resolve voice mode from config/CLI override."""
@@ -179,6 +222,8 @@ class Bloviate:
 
     def on_ptt_press(self):
         """Called when PTT is activated."""
+        if self._shutdown_event.is_set():
+            return
         print("\n[PTT] Activated")
 
         if self.ui_window:
@@ -193,14 +238,12 @@ class Bloviate:
 
         if self.transcriber.supports_streaming():
             # Connect asynchronously so PTT press returns immediately
-            threading.Thread(
-                target=self.transcriber.start_stream,
-                args=("dictation",),
-                daemon=True,
-            ).start()
+            self._start_worker(self.transcriber.start_stream, "dictation")
 
     def on_ptt_release(self):
         """Called when PTT is released."""
+        if self._shutdown_event.is_set():
+            return
         print("[PTT] Released")
 
         if self.ui_window:
@@ -213,11 +256,7 @@ class Bloviate:
         recorded = self.recorded_audio
         self.recorded_audio = []
         if len(recorded) > 0:
-            threading.Thread(
-                target=self.process_recording,
-                args=(recorded,),
-                daemon=True,
-            ).start()
+            self._start_worker(self.process_recording, recorded)
         else:
             if self.transcriber.supports_streaming():
                 self.transcriber.finish_stream("dictation")
@@ -227,6 +266,8 @@ class Bloviate:
 
     def on_command_press(self):
         """Called when command mode PTT is activated."""
+        if self._shutdown_event.is_set():
+            return
         print("\n[CMD] Activated")
 
         if self.ui_window:
@@ -239,14 +280,12 @@ class Bloviate:
         self._last_interim_update = 0.0
 
         if self.transcriber.supports_streaming():
-            threading.Thread(
-                target=self.transcriber.start_stream,
-                args=("command",),
-                daemon=True,
-            ).start()
+            self._start_worker(self.transcriber.start_stream, "command")
 
     def on_command_release(self):
         """Called when command mode PTT is released."""
+        if self._shutdown_event.is_set():
+            return
         print("[CMD] Released")
 
         if self.ui_window:
@@ -258,11 +297,7 @@ class Bloviate:
         recorded = self.recorded_command_audio
         self.recorded_command_audio = []
         if len(recorded) > 0:
-            threading.Thread(
-                target=self.process_command_recording,
-                args=(recorded,),
-                daemon=True,
-            ).start()
+            self._start_worker(self.process_command_recording, recorded)
         else:
             if self.transcriber.supports_streaming():
                 self.transcriber.finish_stream("command")
@@ -397,6 +432,8 @@ class Bloviate:
 
     def process_command_recording(self, recorded_chunks=None):
         """Process the recorded command audio."""
+        if self._shutdown_event.is_set():
+            return
         if recorded_chunks is None:
             recorded_chunks = self.recorded_command_audio
         # Concatenate all recorded chunks
@@ -408,11 +445,15 @@ class Bloviate:
         text = None
         if self.transcriber.supports_streaming():
             text = self.transcriber.finish_stream("command")
+        if self._shutdown_event.is_set():
+            return
 
         if not text:
             # Apply noise suppression for offline transcription
             audio = self.noise_suppressor.process(audio)
             text = self.transcriber.transcribe(audio)
+        if self._shutdown_event.is_set():
+            return
 
         if not text:
             print("[CMD] No transcription generated")
@@ -446,6 +487,8 @@ class Bloviate:
 
     def process_recording(self, recorded_chunks=None):
         """Process the recorded audio."""
+        if self._shutdown_event.is_set():
+            return
         if recorded_chunks is None:
             recorded_chunks = self.recorded_audio
         # Concatenate all recorded chunks
@@ -457,6 +500,8 @@ class Bloviate:
         stream_text = None
         if self.transcriber.supports_streaming():
             stream_text = self.transcriber.finish_stream("dictation")
+        if self._shutdown_event.is_set():
+            return
 
         # Keep a denoised path for transcription and an optional raw path for
         # speaker verification (noise suppression can blur speaker identity).
@@ -465,6 +510,8 @@ class Bloviate:
             self.config.get("voice_fingerprint", {}).get("verify_on_raw_audio", True)
         )
         audio_for_verification = raw_audio if verify_on_raw else audio_for_transcription
+        if self._shutdown_event.is_set():
+            return
 
         # Verify speaker (or bypass in talk mode)
         if self.talk_mode:
@@ -519,6 +566,8 @@ class Bloviate:
 
         if text:
             print(f"✓ Transcribed: {text}")
+            if self._shutdown_event.is_set():
+                return
 
             # Check if text contains a voice command
             if self._try_voice_command(text):
@@ -579,6 +628,8 @@ class Bloviate:
 
     def audio_callback(self, audio_data: np.ndarray):
         """Called for each audio chunk."""
+        if self._shutdown_event.is_set():
+            return
         # Update UI with audio level
         if self.ui_window:
             level = self.audio_capture.get_audio_level(audio_data)
@@ -599,7 +650,7 @@ class Bloviate:
 
     def _emit_interim(self, mode: str):
         """Emit interim transcription updates with throttling."""
-        if not self.ui_window:
+        if self._shutdown_event.is_set() or not self.ui_window:
             return
 
         now = time.time()
@@ -665,6 +716,14 @@ class Bloviate:
         finally:
             # Cleanup in proper order
             print("Cleaning up...")
+            self._shutdown_event.set()
+            self.is_recording = False
+            self.is_command_recording = False
+
+            ui_window = self.ui_window
+            ui_app = self.ui_app
+            self.ui_window = None
+            self.ui_app = None
 
             # Stop PTT handler first
             try:
@@ -678,14 +737,23 @@ class Bloviate:
             except Exception as e:
                 print(f"Error stopping audio capture: {e}")
 
+            # Close streaming/network resources before interpreter teardown
+            try:
+                self.transcriber.shutdown()
+            except Exception as e:
+                print(f"Error shutting down transcriber: {e}")
+
+            # Let in-flight workers finish without touching torn-down UI objects
+            self._join_workers()
+
             # Clean up UI
             try:
-                if self.ui_window:
-                    if hasattr(self.ui_window, 'menu_bar_indicator') and self.ui_window.menu_bar_indicator:
-                        self.ui_window.menu_bar_indicator.close()
-                    self.ui_window.close()
-                if self.ui_app:
-                    self.ui_app.quit()
+                if ui_window:
+                    if hasattr(ui_window, 'menu_bar_indicator') and ui_window.menu_bar_indicator:
+                        ui_window.menu_bar_indicator.close()
+                    ui_window.close()
+                if ui_app:
+                    ui_app.quit()
             except Exception as e:
                 print(f"Error cleaning up UI: {e}")
 

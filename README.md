@@ -22,6 +22,14 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+Create your local dictionary file if you want custom replacements:
+
+```bash
+cp custom_dictionary.example.yaml custom_dictionary.yaml
+```
+
+`custom_dictionary.yaml` is gitignored on purpose, so each user keeps their own dictionary locally.
+
 ## Usage
 
 ### 1. Enroll Your Voice
@@ -51,6 +59,9 @@ Edit `config.yaml` to customize:
 - Voice matching threshold
 - Noise suppression levels
 - Final-pass provider order (`openai` / `deepgram` / `whisper`)
+- Optional local dictionary path via `transcription.custom_dictionary_path`
+
+You can also set `BLOVIATE_CUSTOM_DICTIONARY_PATH` if you want the dictionary outside the repo entirely.
 
 ## How It Works
 

@@ -13,6 +13,13 @@ cd bloviate
 source venv/bin/activate
 ```
 
+3. Optional: create your personal dictionary file:
+```bash
+cp custom_dictionary.example.yaml custom_dictionary.yaml
+```
+
+`custom_dictionary.yaml` is gitignored, so collaborators do not get each other's entries when they clone the repo.
+
 ## First Time Setup: Voice Enrollment
 
 Before using Bloviate, you need to enroll your whisper voice so it can distinguish you from background speakers.
@@ -128,6 +135,20 @@ transcription:
 - `base.en` - Good balance (recommended)
 - `small.en` - More accurate, slower
 - `medium.en` - Most accurate, slowest
+
+### Local Custom Dictionary
+Bloviate looks for a local `custom_dictionary.yaml` in the repo root by default. To keep that file outside the repo, set either:
+
+```yaml
+transcription:
+  custom_dictionary_path: "~/Library/Application Support/Bloviate/custom_dictionary.yaml"
+```
+
+or:
+
+```bash
+export BLOVIATE_CUSTOM_DICTIONARY_PATH="$HOME/Library/Application Support/Bloviate/custom_dictionary.yaml"
+```
 
 ### Quality-First Hybrid Dictation (Recommended)
 Use streaming for live feedback and accuracy-first providers for final text.
