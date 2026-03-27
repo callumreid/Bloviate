@@ -40,6 +40,12 @@ transcription:
   model: "medium.en"  # Whisper primary: tiny.en, base.en, small.en, medium.en
   whisper_fallback_model: "medium.en"  # Accuracy-first local fallback
   final_pass: "hybrid"  # hybrid=streaming interim + prerecorded final for best accuracy
+  initial_prompt: ""  # Optional base prompt applied to OpenAI + Whisper transcriptions
+  include_command_vocabulary: true  # Bias command-mode transcription toward built-in voice commands
+  prompt_max_terms: 40  # Keep automatic prompting concise so it helps more than it over-biases
+  prompt_max_chars: 600  # Hard cap for generated prompt length
+  personal_dictionary_path: "personal_dictionary.yaml"  # Preferred terms + correction rules in one local file
+  learned_terms_path: "learned_terms.txt"  # Legacy fallback for old learned-terms files
   final_pass_provider_priority:  # Try providers in this order for final text
     - "openai"
     - "deepgram"
@@ -47,7 +53,7 @@ transcription:
   language: "en"
   output_format: "clipboard"  # clipboard, stdout, both
   auto_paste: true  # Automatically paste after copying to clipboard
-  use_custom_dictionary: true  # Apply custom dictionary corrections
+  use_custom_dictionary: true  # Apply correction rules from the personal/legacy dictionary
 
 # Deepgram (live streaming)
 deepgram:

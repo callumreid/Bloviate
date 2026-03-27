@@ -35,7 +35,14 @@ def _load_dotenv(path: Optional[Path] = None):
                 os.environ[key] = value
 
 from audio_capture import AudioCapture
+from command_vocabulary import (
+    DESKTOP_PREFIX_SUFFIXES,
+    WINDOW_COMMAND_ALIASES,
+    WINDOW_PREFIX_SUFFIXES,
+    sorted_aliases,
+)
 from noise_suppressor import NoiseSuppressor
+from personal_dictionary import add_preferred_terms, load_personal_dictionary, resolve_personal_dictionary_path
 from voice_fingerprint import VoiceFingerprint
 from ptt_handler import PTTHandler
 from transcriber import Transcriber
@@ -316,37 +323,7 @@ class Bloviate:
         if not normalized:
             return None
 
-        command_phrases = [
-            # Halves
-            ("left", ["left", "left half", "left side", "left hand", "left-hand"]),
-            ("right", ["right", "right half", "right side", "right hand", "right-hand"]),
-            ("top", ["top", "top half", "upper", "upper half", "up"]),
-            ("bottom", ["bottom", "bottom half", "lower", "lower half", "down"]),
-            # Full screen
-            ("fullscreen", ["full screen", "fullscreen", "maximize"]),
-            ("exit_fullscreen", ["exit full screen", "exit fullscreen", "unmaximize", "restore"]),
-            # Resize
-            ("larger", ["larger", "bigger", "grow"]),
-            ("smaller", ["smaller", "shrink"]),
-            # Quarters
-            ("top_left_quarter", ["top left quarter", "top left", "first quarter"]),
-            ("top_right_quarter", ["top right quarter", "top right", "second quarter"]),
-            ("bottom_left_quarter", ["bottom left quarter", "bottom left", "third quarter"]),
-            ("bottom_right_quarter", ["bottom right quarter", "bottom right", "fourth quarter"]),
-            # Desktop switching
-            ("desktop_left", ["desktop left"]),
-            ("desktop_right", ["desktop right"]),
-        ]
-
-        # Build flat list and sort by phrase length descending so longer
-        # phrases match before shorter ones (e.g. "top left" before "top")
-        all_phrases = []
-        for position, phrases in command_phrases:
-            for phrase in phrases:
-                all_phrases.append((phrase, position))
-        all_phrases.sort(key=lambda x: len(x[0]), reverse=True)
-
-        for phrase, position in all_phrases:
+        for phrase, position in sorted_aliases(WINDOW_COMMAND_ALIASES):
             if f" {phrase} " in normalized:
                 return position
 
@@ -365,49 +342,15 @@ class Bloviate:
         if not normalized:
             return False
 
-        # Define the known command suffixes for each prefix
-        window_suffixes = [
-            ("left", ["left", "left half", "left side"]),
-            ("right", ["right", "right half", "right side"]),
-            ("top", ["top", "top half", "upper half"]),
-            ("bottom", ["bottom", "bottom half", "lower half"]),
-            ("fullscreen", ["full screen", "fullscreen", "maximize"]),
-            ("exit_fullscreen", ["exit full screen", "exit fullscreen", "unmaximize", "restore"]),
-            ("larger", ["larger", "bigger", "grow"]),
-            ("smaller", ["smaller", "shrink"]),
-            ("top_left_quarter", ["top left quarter", "top left"]),
-            ("top_right_quarter", ["top right quarter", "top right"]),
-            ("bottom_left_quarter", ["bottom left quarter", "bottom left"]),
-            ("bottom_right_quarter", ["bottom right quarter", "bottom right"]),
-        ]
-
-        desktop_suffixes = [
-            ("desktop_left", ["left"]),
-            ("desktop_right", ["right"]),
-        ]
-
-        # Build sorted phrase lists (longest first)
-        window_phrases = []
-        for position, suffixes in window_suffixes:
-            for suffix in suffixes:
-                window_phrases.append((suffix, position))
-        window_phrases.sort(key=lambda x: len(x[0]), reverse=True)
-
-        desktop_phrases = []
-        for position, suffixes in desktop_suffixes:
-            for suffix in suffixes:
-                desktop_phrases.append((suffix, position))
-        desktop_phrases.sort(key=lambda x: len(x[0]), reverse=True)
-
         # Check for "window <command>"
-        for suffix, position in window_phrases:
+        for suffix, position in sorted_aliases(WINDOW_PREFIX_SUFFIXES):
             if f" window {suffix} " in normalized:
                 print(f"[VOICE CMD] Matched 'window {suffix}' → {position}")
                 self._execute_voice_command(position, text)
                 return True
 
         # Check for "desktop <command>"
-        for suffix, position in desktop_phrases:
+        for suffix, position in sorted_aliases(DESKTOP_PREFIX_SUFFIXES):
             if f" desktop {suffix} " in normalized:
                 print(f"[VOICE CMD] Matched 'desktop {suffix}' → {position}")
                 self._execute_voice_command(position, text)
@@ -441,17 +384,36 @@ class Bloviate:
 
         print(f"[CMD] Processing {len(audio)} samples ({len(audio)/self.config['audio']['sample_rate']:.2f}s)")
 
-        # Finalize streaming (if enabled) or fall back to offline transcription
-        text = None
+        # Prefer the live transcript for latency, but retry with the
+        # higher-accuracy final-pass providers when the command does not parse.
+        stream_text = None
         if self.transcriber.supports_streaming():
-            text = self.transcriber.finish_stream("command")
+            stream_text = self.transcriber.finish_stream("command")
         if self._shutdown_event.is_set():
             return
 
-        if not text:
-            # Apply noise suppression for offline transcription
-            audio = self.noise_suppressor.process(audio)
-            text = self.transcriber.transcribe(audio)
+        command = None
+        text = stream_text
+        if stream_text:
+            command = self._parse_window_command(stream_text)
+            if command:
+                print(f"[CMD] Streaming recognized command: {command}")
+
+        if not command:
+            audio_for_transcription = self.noise_suppressor.process(audio)
+            final_provider_order = self.transcriber.get_final_pass_provider_priority()
+            final_text, provider_used = self.transcriber.transcribe_with_priority(
+                audio_for_transcription,
+                final_provider_order,
+                mode="command",
+            )
+            if final_text:
+                text = final_text
+                command = self._parse_window_command(final_text)
+                if provider_used:
+                    print(f"[CMD] Final-pass provider: {provider_used}")
+                if stream_text and final_text != stream_text:
+                    print("[CMD] Using higher-accuracy final pass instead of streaming text")
         if self._shutdown_event.is_set():
             return
 
@@ -463,7 +425,6 @@ class Bloviate:
 
         print(f"[CMD] Transcribed: {text}")
 
-        command = self._parse_window_command(text)
         if command:
             print(f"[CMD] Recognized command: {command}")
             if self.window_manager:
@@ -547,13 +508,13 @@ class Bloviate:
             if not text:
                 print("[Final] Streaming transcript unavailable, trying final-pass providers")
                 text, provider_used = self.transcriber.transcribe_with_priority(
-                    audio_for_transcription, final_provider_order
+                    audio_for_transcription, final_provider_order, mode="dictation"
                 )
                 if provider_used:
                     print(f"[Final] Used provider: {provider_used}")
         else:
             final_text, provider_used = self.transcriber.transcribe_with_priority(
-                audio_for_transcription, final_provider_order
+                audio_for_transcription, final_provider_order, mode="dictation"
             )
             if final_text:
                 text = final_text
@@ -790,12 +751,54 @@ def main():
         choices=['whisper', 'talk'],
         help='Override voice mode (whisper=verify, talk=bypass)'
     )
+    parser.add_argument(
+        '--add-term',
+        '--learn-term',
+        action='append',
+        dest='add_term',
+        default=[],
+        help='Add a preferred term to the local personal dictionary (repeatable)'
+    )
+    parser.add_argument(
+        '--show-personal-dictionary',
+        '--list-learned-terms',
+        action='store_true',
+        dest='show_personal_dictionary',
+        help='Show the local personal dictionary and exit'
+    )
 
     args = parser.parse_args()
 
     # Change to project directory
     project_dir = Path(__file__).parent.parent
     os.chdir(project_dir)
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f) or {}
+
+    if args.add_term:
+        path, added = add_preferred_terms(config, args.add_term)
+        if added:
+            print(f"Added {len(added)} preferred term(s) to {path}:")
+            for term in added:
+                print(f"  - {term}")
+        else:
+            print(f"No new preferred terms added. File: {path}")
+        sys.exit(0)
+
+    if args.show_personal_dictionary:
+        path = resolve_personal_dictionary_path(config)
+        personal_dictionary = load_personal_dictionary(config)
+        terms = personal_dictionary.get("preferred_terms", [])
+        corrections = personal_dictionary.get("corrections", [])
+        print(f"Personal dictionary file: {path}")
+        print(f"Preferred terms: {len(terms)}")
+        for term in terms:
+            print(f"  - {term}")
+        print(f"Corrections: {len(corrections)}")
+        for entry in corrections:
+            variations = ", ".join(entry.get("variations", []))
+            print(f"  - {entry.get('phrase')}: {variations}")
+        sys.exit(0)
 
     app = Bloviate(config_path=args.config, voice_mode_override=args.voice_mode)
 

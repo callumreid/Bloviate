@@ -15,10 +15,17 @@ source venv/bin/activate
 
 3. Optional: create your personal dictionary file:
 ```bash
-cp custom_dictionary.example.yaml custom_dictionary.yaml
+cp personal_dictionary.example.yaml personal_dictionary.yaml
 ```
 
-`custom_dictionary.yaml` is gitignored, so collaborators do not get each other's entries when they clone the repo.
+`personal_dictionary.yaml` is gitignored, so collaborators do not get each other's entries when they clone the repo.
+
+4. Optional: add preferred terms for names, tools, and commands you use a lot:
+```bash
+python src/main.py --add-term "Raycast" --add-term "kubectl" --add-term "gpt-4o-transcribe"
+```
+
+This writes to `personal_dictionary.yaml` locally and keeps it out of git.
 
 ## First Time Setup: Voice Enrollment
 
@@ -136,19 +143,46 @@ transcription:
 - `small.en` - More accurate, slower
 - `medium.en` - Most accurate, slowest
 
-### Local Custom Dictionary
-Bloviate looks for a local `custom_dictionary.yaml` in the repo root by default. To keep that file outside the repo, set either:
+### Personal Dictionary
+Bloviate looks for a local `personal_dictionary.yaml` in the repo root by default. It can hold both preferred terms and correction rules. To keep that file outside the repo, set either:
 
 ```yaml
 transcription:
-  custom_dictionary_path: "~/Library/Application Support/Bloviate/custom_dictionary.yaml"
+  personal_dictionary_path: "~/Library/Application Support/Bloviate/personal_dictionary.yaml"
 ```
 
 or:
 
 ```bash
-export BLOVIATE_CUSTOM_DICTIONARY_PATH="$HOME/Library/Application Support/Bloviate/custom_dictionary.yaml"
+export BLOVIATE_PERSONAL_DICTIONARY_PATH="$HOME/Library/Application Support/Bloviate/personal_dictionary.yaml"
 ```
+
+Example structure:
+
+```yaml
+preferred_terms:
+  - Raycast
+  - kubectl
+  - Claude Code
+
+corrections:
+  - phrase: "kubectl"
+    variations:
+      - "cube cuddle"
+      - "cube control"
+    match: "substring"
+```
+
+Add preferred terms from the CLI:
+
+```bash
+python src/main.py --add-term "Raycast" --add-term "kubectl" --add-term "Claude Code"
+python src/main.py --show-personal-dictionary
+```
+
+Use `preferred_terms` when you want the models to bias toward exact spellings. Use `corrections` when you want a known wrong output rewritten deterministically.
+
+If you already have `custom_dictionary.yaml` or `learned_terms.txt`, Bloviate still reads them while you migrate.
 
 ### Quality-First Hybrid Dictation (Recommended)
 Use streaming for live feedback and accuracy-first providers for final text.
@@ -181,6 +215,8 @@ openai:
 Notes:
 - Streaming sends audio while you hold PTT for low-latency interim text.
 - Final text runs through provider priority order, so OpenAI can win accuracy while Deepgram/Whisper remain fallback.
+- OpenAI/Whisper prompting automatically includes personal dictionary preferred terms and built-in command phrases.
+- Command mode retries the higher-accuracy final-pass providers if the live stream does not parse into a known command.
 
 ### Adjust Noise Suppression
 ```yaml

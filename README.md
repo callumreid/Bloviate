@@ -22,13 +22,27 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Create your local dictionary file if you want custom replacements:
+Create your local personal dictionary file:
 
 ```bash
-cp custom_dictionary.example.yaml custom_dictionary.yaml
+cp personal_dictionary.example.yaml personal_dictionary.yaml
 ```
 
-`custom_dictionary.yaml` is gitignored on purpose, so each user keeps their own dictionary locally.
+`personal_dictionary.yaml` is gitignored on purpose, so each user keeps their own dictionary locally.
+
+It handles both parts of the vocabulary problem:
+
+- `preferred_terms`: bias the models toward exact spellings before transcription
+- `corrections`: deterministically rewrite known bad outputs after transcription
+
+You can also add preferred terms from the CLI without editing YAML:
+
+```bash
+python src/main.py --add-term "Raycast" --add-term "kubectl" --add-term "gpt-4o-transcribe"
+python src/main.py --show-personal-dictionary
+```
+
+Bloviate still reads legacy `custom_dictionary.yaml` and `learned_terms.txt` files if you already have them, but new writes go to `personal_dictionary.yaml`.
 
 ## Usage
 
@@ -59,9 +73,11 @@ Edit `config.yaml` to customize:
 - Voice matching threshold
 - Noise suppression levels
 - Final-pass provider order (`openai` / `deepgram` / `whisper`)
-- Optional local dictionary path via `transcription.custom_dictionary_path`
+- Optional personal dictionary path via `transcription.personal_dictionary_path`
+- Prompt tuning via `transcription.initial_prompt`, `prompt_max_terms`, and `prompt_max_chars`
 
-You can also set `BLOVIATE_CUSTOM_DICTIONARY_PATH` if you want the dictionary outside the repo entirely.
+You can also set `BLOVIATE_PERSONAL_DICTIONARY_PATH` if you want the dictionary outside the repo entirely.
+Legacy `BLOVIATE_CUSTOM_DICTIONARY_PATH` and `BLOVIATE_LEARNED_TERMS_PATH` still work for migration.
 
 ## How It Works
 
@@ -69,4 +85,6 @@ You can also set `BLOVIATE_CUSTOM_DICTIONARY_PATH` if you want the dictionary ou
 2. **Noise Suppression**: Applies spectral subtraction and adaptive filtering
 3. **Voice Activity Detection**: Detects speech segments
 4. **Speaker Verification**: Compares against your enrolled voice profile
-5. **Transcription**: Sends verified audio to speech-to-text engine
+5. **Transcription**: Sends verified audio to speech-to-text engine using live Deepgram plus an accuracy-first final pass
+6. **Vocabulary Biasing**: Feeds personal dictionary preferred terms and command phrases into prompting/keyterms before post-correction runs
+7. **Correction Rules**: Applies personal dictionary corrections after transcription for known recurring mistakes

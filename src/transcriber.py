@@ -16,11 +16,13 @@ import urllib.parse
 import urllib.request
 import wave
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import yaml
 from pynput.keyboard import Controller, Key
+from command_vocabulary import get_command_prompt_phrases
+from personal_dictionary import load_personal_dictionary
 
 try:
     from deepgram_stream import DeepgramLiveSession
@@ -33,15 +35,16 @@ class Transcriber:
 
     def __init__(self, config: dict):
         self.config = config
+        self.transcription_config = config.get("transcription", {})
         self.provider = self._normalize_provider_name(
-            config['transcription'].get('provider', 'whisper')
+            self.transcription_config.get('provider', 'whisper')
         ) or "whisper"
-        self.model_name = config['transcription'].get('model', 'base.en')
-        self.language = config['transcription']['language']
-        self.output_format = config['transcription']['output_format']
+        self.model_name = self.transcription_config.get('model', 'base.en')
+        self.language = self.transcription_config['language']
+        self.output_format = self.transcription_config['output_format']
         self.sample_rate = config['audio']['sample_rate']
-        self.auto_paste = config['transcription'].get('auto_paste', True)
-        self.use_custom_dictionary = config['transcription'].get('use_custom_dictionary', True)
+        self.auto_paste = self.transcription_config.get('auto_paste', True)
+        self.use_custom_dictionary = self.transcription_config.get('use_custom_dictionary', True)
         self.deepgram_config = config.get('deepgram', {})
         self.openai_config = config.get("openai", {})
         self.deepgram_streaming = bool(self.deepgram_config.get('streaming', True))
@@ -51,18 +54,36 @@ class Transcriber:
         self._prebuffer_chunks = int(self.deepgram_config.get("prebuffer_chunks", 12))
         self._deepgram_max_keyterms = int(self.deepgram_config.get("max_keyterms", 80))
         self._openai_key_missing_warned = False
+        self._base_initial_prompt = str(self.transcription_config.get("initial_prompt", "") or "").strip()
+        self._prompt_max_terms = max(1, int(self.transcription_config.get("prompt_max_terms", 40)))
+        self._prompt_max_chars = max(120, int(self.transcription_config.get("prompt_max_chars", 600)))
+        self._include_command_vocabulary = bool(
+            self.transcription_config.get("include_command_vocabulary", True)
+        )
+        self._auto_prompt_cache = {}
 
         # Keyboard controller for auto-paste
         self.keyboard = Controller()
 
-        # Load custom dictionary
-        self.custom_dictionary = []
-        if self.use_custom_dictionary:
-            self._load_custom_dictionary()
+        personal_dictionary = load_personal_dictionary(self.config)
+        self.learned_terms = personal_dictionary.get("preferred_terms", [])
+        self.custom_dictionary = personal_dictionary.get("corrections", []) if self.use_custom_dictionary else []
+        self.personal_dictionary_sources = personal_dictionary.get("sources", [])
 
+        self._prompt_terms = self._build_prompt_terms()
+        self._command_prompt_terms = self._build_command_prompt_terms()
         self._deepgram_bias_terms = self._build_deepgram_bias_terms()
+        self._deepgram_command_terms = self._build_deepgram_command_terms()
         if self.provider == "deepgram" and self._deepgram_bias_terms:
             print(f"[Deepgram] Loaded {len(self._deepgram_bias_terms)} bias terms")
+        if self.provider == "deepgram" and self._deepgram_command_terms:
+            print(f"[Deepgram] Loaded {len(self._deepgram_command_terms)} command keyterms")
+        if self.learned_terms:
+            print(f"[Transcription] Loaded {len(self.learned_terms)} preferred terms")
+        if self.custom_dictionary:
+            print(f"[Transcription] Loaded {len(self.custom_dictionary)} correction rules")
+        if self.personal_dictionary_sources:
+            print(f"[Transcription] Personal dictionary sources: {', '.join(self.personal_dictionary_sources)}")
 
         # Track active Deepgram streams by mode name
         self._streams = {}
@@ -99,6 +120,8 @@ class Transcriber:
             self._whisper_load_thread.start()
         else:
             self._load_whisper_model()
+
+        self._log_transcription_plan()
 
     @staticmethod
     def _normalize_provider_name(provider: Optional[str]) -> Optional[str]:
@@ -141,56 +164,6 @@ class Transcriber:
             return ["deepgram", "whisper"]
         return ["whisper"]
 
-    def _load_custom_dictionary(self):
-        """Load custom dictionary from YAML file."""
-        dict_path = self._resolve_custom_dictionary_path()
-
-        if not dict_path.exists():
-            print(f"Custom dictionary not found at {dict_path}, skipping...")
-            return
-
-        try:
-            with open(dict_path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-
-            if not data or 'entries' not in data:
-                return
-
-            # Build dictionary with variations sorted by length (longest first)
-            for entry in data['entries']:
-                phrase = entry.get('phrase', '')
-                variations = entry.get('variations', [])
-                match_mode = entry.get('match', 'substring')
-
-                if phrase and variations:
-                    # Sort variations by length (longest first) to avoid partial replacements
-                    sorted_variations = sorted(variations, key=len, reverse=True)
-                    self.custom_dictionary.append({
-                        'phrase': phrase,
-                        'variations': sorted_variations,
-                        'match': match_mode
-                    })
-
-            print(f"Loaded {len(self.custom_dictionary)} custom dictionary entries from {dict_path}")
-
-        except Exception as e:
-            print(f"Error loading custom dictionary from {dict_path}: {e}")
-
-    def _resolve_custom_dictionary_path(self) -> Path:
-        """Resolve the local custom dictionary path."""
-        raw_path = (
-            self.config.get('transcription', {}).get('custom_dictionary_path')
-            or os.getenv('BLOVIATE_CUSTOM_DICTIONARY_PATH')
-        )
-
-        if raw_path:
-            dict_path = Path(raw_path).expanduser()
-            if not dict_path.is_absolute():
-                dict_path = Path(__file__).resolve().parent.parent / dict_path
-            return dict_path
-
-        return Path(__file__).resolve().parent.parent / "custom_dictionary.yaml"
-
     def _apply_custom_dictionary(self, text: str) -> str:
         """Apply custom dictionary corrections to transcribed text."""
         if not self.custom_dictionary:
@@ -219,40 +192,42 @@ class Transcriber:
 
         return corrected
 
-    def transcribe(self, audio: np.ndarray) -> Optional[str]:
+    def transcribe(self, audio: np.ndarray, mode: str = "dictation") -> Optional[str]:
         """
         Transcribe audio to text.
 
         Falls back to local Whisper automatically when the configured provider fails.
         """
         if self.provider == "deepgram":
-            result = self._transcribe_deepgram_prerecorded(audio)
+            result = self._transcribe_deepgram_prerecorded(audio, mode=mode)
             if result:
                 return result
             print(f"[Fallback] Deepgram unavailable, using local Whisper ({self.model_name})")
-            return self._transcribe_whisper(audio)
+            return self._transcribe_whisper(audio, mode=mode)
         if self.provider == "openai":
-            result = self._transcribe_openai(audio)
+            result = self._transcribe_openai(audio, mode=mode)
             if result:
                 return result
             print(f"[Fallback] OpenAI unavailable, using local Whisper ({self.model_name})")
-            return self._transcribe_whisper(audio)
+            return self._transcribe_whisper(audio, mode=mode)
 
-        return self._transcribe_whisper(audio)
+        return self._transcribe_whisper(audio, mode=mode)
 
-    def transcribe_with_provider(self, provider: str, audio: np.ndarray) -> Optional[str]:
+    def transcribe_with_provider(
+        self, provider: str, audio: np.ndarray, mode: str = "dictation"
+    ) -> Optional[str]:
         """Transcribe with an explicit provider, without cross-provider fallback."""
         normalized = self._normalize_provider_name(provider)
         if normalized == "deepgram":
-            return self._transcribe_deepgram_prerecorded(audio)
+            return self._transcribe_deepgram_prerecorded(audio, mode=mode)
         if normalized == "openai":
-            return self._transcribe_openai(audio)
+            return self._transcribe_openai(audio, mode=mode)
         if normalized == "whisper":
-            return self._transcribe_whisper(audio)
+            return self._transcribe_whisper(audio, mode=mode)
         return None
 
     def transcribe_with_priority(
-        self, audio: np.ndarray, providers: List[str]
+        self, audio: np.ndarray, providers: List[str], mode: str = "dictation"
     ) -> Tuple[Optional[str], Optional[str]]:
         """Try providers in order and return (text, provider_used)."""
         for provider in providers:
@@ -265,12 +240,12 @@ class Transcriber:
                     print(f"[OpenAI] Skipping provider (missing key: {env_name})")
                     self._openai_key_missing_warned = True
                 continue
-            text = self.transcribe_with_provider(normalized, audio)
+            text = self.transcribe_with_provider(normalized, audio, mode=mode)
             if text:
                 return text, normalized
         return None, None
 
-    def _transcribe_whisper(self, audio: np.ndarray) -> Optional[str]:
+    def _transcribe_whisper(self, audio: np.ndarray, mode: str = "dictation") -> Optional[str]:
         """Transcribe with local Whisper model, loading it lazily if needed."""
         if self.model is None and self._whisper_load_thread:
             self._whisper_load_thread.join(timeout=30)
@@ -293,12 +268,15 @@ class Transcriber:
             if len(audio) < min_samples:
                 audio = np.pad(audio, (0, min_samples - len(audio)))
 
+            prompt = self._compose_prompt("whisper", mode=mode)
+
             # Transcribe with Whisper
             result = self.model.transcribe(
                 audio,
                 language=self.language,
                 fp16=False,  # Use FP32 for CPU compatibility
                 verbose=False,
+                initial_prompt=prompt or None,
             )
 
             text = result['text'].strip()
@@ -363,7 +341,7 @@ class Transcriber:
             evt.set()
             return False
 
-        url = self._build_deepgram_live_url()
+        url = self._build_deepgram_live_url(mode=mode)
         session = DeepgramLiveSession(
             api_key,
             url,
@@ -523,44 +501,84 @@ class Transcriber:
         except Exception as exc:
             print(f"[Deepgram] WARNING: Could not validate API key ({exc})")
 
-    def _build_deepgram_live_url(self) -> str:
+    def _build_deepgram_live_url(self, mode: Optional[str] = None) -> str:
         api_version = self._deepgram_api_version(for_streaming=True)
         params = self._deepgram_query_params(
             for_streaming=True,
             api_version=api_version,
+            mode=mode,
         )
 
         query = urllib.parse.urlencode(params, doseq=True)
         return f"wss://api.deepgram.com/{api_version}/listen?{query}"
 
-    def _build_deepgram_bias_terms(self) -> List[str]:
-        """Build bias terms from config plus custom dictionary phrases."""
+    @staticmethod
+    def _append_unique_term(
+        target: List[str], seen: set, value: str, *, max_length: Optional[int] = None
+    ):
+        term = str(value).strip()
+        if not term:
+            return
+        if max_length and len(term) > max_length:
+            return
+        key = term.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        target.append(term)
+
+    @staticmethod
+    def _coerce_string_list(value) -> List[str]:
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        return []
+
+    def _build_prompt_terms(self) -> List[str]:
+        """Build prompt terms from config and custom dictionary phrases."""
         terms: List[str] = []
         seen = set()
 
-        def _add_term(value: str):
-            term = str(value).strip()
-            if not term:
-                return
-            if len(term) > 80:
-                return
-            key = term.lower()
-            if key in seen:
-                return
-            seen.add(key)
-            terms.append(term)
+        for term in self._coerce_string_list(self.transcription_config.get("prompt_terms")):
+            self._append_unique_term(terms, seen, term)
 
-        configured = self.deepgram_config.get("keyterm", [])
-        if isinstance(configured, str):
-            configured = [configured]
-        if isinstance(configured, list):
-            for term in configured:
-                _add_term(term)
+        for term in self._coerce_string_list(self.deepgram_config.get("keyterm")):
+            self._append_unique_term(terms, seen, term)
+
+        for entry in self.custom_dictionary:
+            self._append_unique_term(terms, seen, entry.get("phrase", ""))
+
+        for term in self.learned_terms:
+            self._append_unique_term(terms, seen, term)
+
+        return terms
+
+    def _build_command_prompt_terms(self) -> List[str]:
+        """Build command phrases for command-mode prompting."""
+        if not self._include_command_vocabulary:
+            return []
+
+        terms: List[str] = []
+        seen = set()
+        for phrase in get_command_prompt_phrases():
+            self._append_unique_term(terms, seen, phrase)
+        return terms
+
+    def _build_deepgram_bias_terms(self) -> List[str]:
+        """Build base Deepgram bias terms from config plus custom dictionary phrases."""
+        terms: List[str] = []
+        seen = set()
+
+        for term in self._coerce_string_list(self.deepgram_config.get("keyterm")):
+            self._append_unique_term(terms, seen, term, max_length=80)
 
         if self.deepgram_config.get("include_dictionary_keyterms", True):
             for entry in self.custom_dictionary:
-                phrase = entry.get("phrase", "")
-                _add_term(phrase)
+                self._append_unique_term(terms, seen, entry.get("phrase", ""), max_length=80)
+
+        for term in self.learned_terms:
+            self._append_unique_term(terms, seen, term, max_length=80)
 
         if len(terms) > self._deepgram_max_keyterms:
             terms = terms[:self._deepgram_max_keyterms]
@@ -570,6 +588,28 @@ class Transcriber:
             )
 
         return terms
+
+    def _build_deepgram_command_terms(self) -> List[str]:
+        """Build command-mode Deepgram keyterms from the shared command vocabulary."""
+        terms: List[str] = []
+        seen = set()
+        for phrase in self._command_prompt_terms:
+            self._append_unique_term(terms, seen, phrase, max_length=80)
+        return terms
+
+    def _deepgram_terms_for_mode(self, mode: Optional[str]) -> List[str]:
+        """Return base terms plus command terms for command-mode requests."""
+        mode_name = str(mode or "dictation").strip().lower()
+        if mode_name != "command" or not self._deepgram_command_terms:
+            return self._deepgram_bias_terms
+
+        merged = list(self._deepgram_bias_terms)
+        seen = {term.lower() for term in merged}
+        for term in self._deepgram_command_terms:
+            self._append_unique_term(merged, seen, term, max_length=80)
+            if len(merged) >= self._deepgram_max_keyterms:
+                break
+        return merged
 
     def _deepgram_api_version(self, for_streaming: bool) -> str:
         explicit = (
@@ -608,7 +648,9 @@ class Transcriber:
 
         return model
 
-    def _deepgram_query_params(self, for_streaming: bool, api_version: str) -> dict:
+    def _deepgram_query_params(
+        self, for_streaming: bool, api_version: str, mode: Optional[str] = None
+    ) -> dict:
         params = {
             "encoding": "linear16",
             "sample_rate": self.sample_rate,
@@ -617,6 +659,7 @@ class Transcriber:
         model = self._deepgram_model_name(for_streaming=for_streaming)
         if model:
             params["model"] = model
+        bias_terms = self._deepgram_terms_for_mode(mode)
 
         if api_version == "v2":
             # v2 Flux-compatible params only.
@@ -638,8 +681,8 @@ class Transcriber:
             if "mip_opt_out" in self.deepgram_config:
                 params["mip_opt_out"] = str(bool(self.deepgram_config.get("mip_opt_out"))).lower()
 
-            if self._deepgram_bias_terms:
-                params["keyterm"] = self._deepgram_bias_terms
+            if bias_terms:
+                params["keyterm"] = bias_terms
 
             tag = self.deepgram_config.get("tag")
             if tag:
@@ -676,12 +719,12 @@ class Transcriber:
             use_keyterm = model_name.startswith("nova-3")
             keywords = self.deepgram_config.get("keywords")
             if use_keyterm:
-                if self._deepgram_bias_terms:
-                    params["keyterm"] = self._deepgram_bias_terms
+                if bias_terms:
+                    params["keyterm"] = bias_terms
             elif keywords:
                 params["keywords"] = keywords
-            elif self._deepgram_bias_terms:
-                single_word_terms = [term for term in self._deepgram_bias_terms if " " not in term]
+            elif bias_terms:
+                single_word_terms = [term for term in bias_terms if " " not in term]
                 if single_word_terms:
                     boost = self.deepgram_config.get("keyword_boost")
                     if boost is None:
@@ -778,7 +821,88 @@ class Transcriber:
         content_type = f"multipart/form-data; boundary={boundary}"
         return bytes(body), content_type
 
-    def _transcribe_openai(self, audio: np.ndarray) -> Optional[str]:
+    def _build_auto_prompt(self, mode: str) -> str:
+        """Build a concise prompt from repo-local vocabulary."""
+        mode_name = str(mode or "dictation").strip().lower()
+        if mode_name == "command":
+            phrases = self._command_prompt_terms[: self._prompt_max_terms]
+            if not phrases:
+                return ""
+            return (
+                "This is a short macOS window-management voice command. "
+                "Prefer exact command phrases such as: "
+                + "; ".join(phrases)
+                + "."
+            )
+
+        terms = self._prompt_terms[: self._prompt_max_terms]
+        if not terms:
+            return ""
+        return (
+            "Prefer exact spellings for technical terms, commands, names, and code phrases such as: "
+            + ", ".join(terms)
+            + "."
+        )
+
+    def _compose_prompt(self, provider: str, mode: str = "dictation") -> str:
+        """Compose provider-specific prompt text with automatic vocabulary hints."""
+        mode_name = str(mode or "dictation").strip().lower()
+        cached = self._auto_prompt_cache.get(mode_name)
+        if cached is None:
+            cached = self._build_auto_prompt(mode_name)
+            self._auto_prompt_cache[mode_name] = cached
+
+        parts: List[str] = []
+        if self._base_initial_prompt:
+            parts.append(self._base_initial_prompt)
+        if provider == "openai":
+            manual_prompt = str(self.openai_config.get("prompt", "") or "").strip()
+            if manual_prompt:
+                parts.append(manual_prompt)
+        if cached:
+            parts.append(cached)
+
+        prompt = " ".join(part for part in parts if part).strip()
+        if len(prompt) > self._prompt_max_chars:
+            prompt = prompt[: self._prompt_max_chars].rstrip(" ,;")
+        return prompt
+
+    def _provider_unavailable_reason(self, provider: str) -> Optional[str]:
+        normalized = self._normalize_provider_name(provider)
+        if normalized == "openai" and not self._get_openai_api_key():
+            env_name = self.openai_config.get("api_key_env", "OPENAI_API_KEY")
+            return f"missing API key ({env_name})"
+        if normalized == "deepgram" and not self._get_deepgram_api_key():
+            env_name = self.deepgram_config.get("api_key_env", "DEEPGRAM_API_KEY")
+            return f"missing API key ({env_name})"
+        return None
+
+    def _log_transcription_plan(self):
+        """Log which providers and prompts are active for this run."""
+        final_providers = self.get_final_pass_provider_priority()
+        if final_providers:
+            print(f"[Transcription] Final-pass provider order: {', '.join(final_providers)}")
+
+        available = []
+        for provider in final_providers:
+            reason = self._provider_unavailable_reason(provider)
+            if reason:
+                print(f"[Transcription] {provider} unavailable: {reason}")
+            else:
+                available.append(provider)
+        if available:
+            print(f"[Transcription] Active final-pass providers: {', '.join(available)}")
+
+        if self._prompt_terms:
+            print(
+                f"[Transcription] Loaded {len(self._prompt_terms)} vocabulary terms for dictation prompting"
+            )
+        if self._command_prompt_terms:
+            print(
+                f"[Transcription] Loaded {len(self._command_prompt_terms)} command phrases for prompting"
+            )
+
+    def _transcribe_openai(self, audio: np.ndarray, mode: str = "dictation") -> Optional[str]:
         api_key = self._get_openai_api_key()
         if not api_key:
             if not self._openai_key_missing_warned:
@@ -797,9 +921,9 @@ class Transcriber:
             "language": self.language,
         }
 
-        prompt = self.openai_config.get("prompt")
+        prompt = self._compose_prompt("openai", mode=mode)
         if prompt:
-            fields["prompt"] = str(prompt)
+            fields["prompt"] = prompt
 
         temperature = self.openai_config.get("temperature")
         if temperature is not None:
@@ -857,7 +981,9 @@ class Transcriber:
             print(f"[OpenAI] Transcription error: {exc}")
             return None
 
-    def _transcribe_deepgram_prerecorded(self, audio: np.ndarray) -> Optional[str]:
+    def _transcribe_deepgram_prerecorded(
+        self, audio: np.ndarray, mode: str = "dictation"
+    ) -> Optional[str]:
         api_key = self._get_deepgram_api_key()
         if not api_key:
             print("Deepgram API key not set (DEEPGRAM_API_KEY or config)")
@@ -877,6 +1003,7 @@ class Transcriber:
         params = self._deepgram_query_params(
             for_streaming=False,
             api_version=api_version,
+            mode=mode,
         )
         query = urllib.parse.urlencode(params, doseq=True)
         url = f"https://api.deepgram.com/{api_version}/listen?{query}"
