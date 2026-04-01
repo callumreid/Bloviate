@@ -1,0 +1,9 @@
+# Custom Dictionary for Bloviate
+# Copy this file to custom_dictionary.yaml to create your local dictionary.
+# The live custom_dictionary.yaml file should stay local.
+#
+# Format:
+#   - phrase: "the correct text you want"
+#     variations: ["how it might be transcribed", "another variation"]
+
+entries: []

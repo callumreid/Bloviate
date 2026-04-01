@@ -1,0 +1,19 @@
+# Personal Dictionary for Bloviate
+#
+# Copy or initialize this file to keep local vocabulary hints and
+# deterministic correction rules in one place.
+#
+# `preferred_terms` bias transcription before decoding.
+# `corrections` rewrite known bad outputs after transcription.
+
+preferred_terms:
+  - Raycast
+  - kubectl
+  - gpt-4o-transcribe
+
+corrections:
+  - phrase: "kubectl"
+    variations:
+      - "cube cuddle"
+      - "cube control"
+    match: "substring"

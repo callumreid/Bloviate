@@ -6,8 +6,10 @@ Main application entry point.
 """
 
 import argparse
+import importlib.util
 import os
-import yaml
+import platform
+import shutil
 import sys
 import threading
 import time
@@ -15,39 +17,390 @@ import re
 import numpy as np
 from pathlib import Path
 from typing import Optional
+import yaml
 
 
 def _load_dotenv(path: Optional[Path] = None):
     """Load KEY=VALUE pairs from a .env file into os.environ."""
-    if path is None:
-        path = Path(__file__).resolve().parent.parent / ".env"
-    if not path.is_file():
-        return
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip().strip("'\"")
-            if key and key not in os.environ:
-                os.environ[key] = value
+    if path is not None:
+        candidate_paths = [path]
+    else:
+        candidate_paths = []
+        override = os.getenv("BLOVIATE_ENV_FILE")
+        if override:
+            candidate_paths.append(Path(override).expanduser())
+        candidate_paths.append(default_user_config_path().parent / ".env")
+        candidate_paths.append(project_root() / ".env")
 
-from audio_capture import AudioCapture
+    for candidate in candidate_paths:
+        if not candidate.is_file():
+            continue
+        with open(candidate, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip("'\"")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+
 from command_vocabulary import (
     DESKTOP_PREFIX_SUFFIXES,
     WINDOW_COMMAND_ALIASES,
     WINDOW_PREFIX_SUFFIXES,
     sorted_aliases,
 )
-from noise_suppressor import NoiseSuppressor
+from app_paths import (
+    config_path as default_user_config_path,
+    describe_paths,
+    ensure_default_config,
+    models_dir as default_models_dir,
+    project_root,
+    read_resource_text,
+)
 from personal_dictionary import add_preferred_terms, load_personal_dictionary, resolve_personal_dictionary_path
-from voice_fingerprint import VoiceFingerprint
-from ptt_handler import PTTHandler
-from transcriber import Transcriber
-from ui import create_ui
-from window_manager import WindowManager
+
+
+def _load_config(config_path: str, *, allow_missing: bool = False) -> tuple[dict, Path]:
+    """Load YAML config relative to the project root."""
+    path = Path(config_path).expanduser()
+    if not path.is_absolute():
+        default_path = default_user_config_path()
+        if path == Path("config.yaml"):
+            path = default_path
+        else:
+            path = Path.cwd() / path
+
+    if not path.exists():
+        if path == default_user_config_path():
+            path = ensure_default_config()
+        if allow_missing:
+            return {}, path
+        if not path.exists():
+            raise FileNotFoundError(f"Config file not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    data["__config_path__"] = str(path)
+    data["__config_dir__"] = str(path.parent)
+    return data, path
+
+
+def _module_available(name: str) -> bool:
+    """Check whether a Python module can be resolved without importing it."""
+    return importlib.util.find_spec(name) is not None
+
+
+def _doctor_line(status: str, label: str, detail: str):
+    print(f"[{status}] {label}: {detail}")
+
+
+def _cli_invocation() -> str:
+    executable = Path(sys.argv[0]).name
+    if executable.startswith("bloviate"):
+        return "bloviate"
+    return "python src/main.py"
+
+
+def _normalize_provider_name(provider: Optional[str]) -> Optional[str]:
+    if provider is None:
+        return None
+
+    value = str(provider).strip().lower()
+    aliases = {
+        "local": "whisper",
+        "local_whisper": "whisper",
+        "openai-stt": "openai",
+        "openai_transcribe": "openai",
+    }
+    return aliases.get(value, value)
+
+
+def _final_pass_providers(config: dict) -> list[str]:
+    configured = config.get("transcription", {}).get("final_pass_provider_priority")
+    providers: list[str] = []
+
+    if isinstance(configured, str):
+        configured = [item.strip() for item in configured.split(",")]
+
+    if isinstance(configured, list):
+        seen = set()
+        for item in configured:
+            normalized = _normalize_provider_name(item)
+            if not normalized or normalized in seen:
+                continue
+            if normalized in {"whisper", "deepgram", "openai"}:
+                providers.append(normalized)
+                seen.add(normalized)
+
+    primary = _normalize_provider_name(
+        config.get("transcription", {}).get("provider", "whisper")
+    )
+    if primary in {"whisper", "deepgram", "openai"} and primary not in providers:
+        providers.insert(0, primary)
+
+    return providers
+
+
+def list_audio_devices(config: Optional[dict] = None) -> int:
+    """Print available audio input devices for configuration."""
+    config = config or {}
+    configured_name = str(config.get("audio", {}).get("device_name", "") or "").strip()
+
+    if not _module_available("sounddevice"):
+        print("sounddevice is not installed. Run `pip install -e .` first.")
+        return 1
+
+    try:
+        import sounddevice as sd
+    except Exception as exc:
+        print(f"Unable to import sounddevice: {exc}")
+        return 1
+
+    try:
+        devices = sd.query_devices()
+    except Exception as exc:
+        print(f"Unable to query audio devices: {exc}")
+        return 1
+
+    input_devices = []
+    for idx, device in enumerate(devices):
+        if device.get("max_input_channels", 0) > 0:
+            input_devices.append((idx, device["name"], device["max_input_channels"]))
+
+    if not input_devices:
+        print("No input devices detected.")
+        return 1
+
+    print("Available input devices:")
+    for idx, name, channels in input_devices:
+        match = ""
+        if configured_name and configured_name.lower() in name.lower():
+            match = "  <- config match"
+        print(f"  [{idx}] {name} (inputs: {channels}){match}")
+
+    if configured_name:
+        matches = [name for _, name, _ in input_devices if configured_name.lower() in name.lower()]
+        if not matches:
+            print(
+                f"\nConfigured device_name '{configured_name}' does not match any current input device."
+            )
+
+    return 0
+
+
+def show_paths() -> int:
+    """Print the current config/data locations."""
+    print("Bloviate paths:")
+    for name, path in describe_paths().items():
+        print(f"  {name}: {path}")
+    return 0
+
+
+def init_personal_dictionary(config: Optional[dict] = None, *, force: bool = False) -> int:
+    """Create a personal dictionary file from the packaged example."""
+    config = config or {}
+    path = resolve_personal_dictionary_path(config)
+    if path.exists() and not force:
+        print(f"Personal dictionary already exists: {path}")
+        return 0
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(read_resource_text("personal_dictionary.example.yaml"), encoding="utf-8")
+    print(f"Initialized personal dictionary: {path}")
+    return 0
+
+
+def run_doctor(config_path: str) -> int:
+    """Run a lightweight environment and configuration preflight."""
+    print("=== Bloviate Doctor ===")
+    failures = 0
+    warnings = 0
+
+    _doctor_line(
+        "OK",
+        "Python",
+        f"{platform.python_version()} ({platform.system()} {platform.release()})",
+    )
+
+    try:
+        config, resolved_config_path = _load_config(config_path)
+        _doctor_line("OK", "Config", str(resolved_config_path))
+    except Exception as exc:
+        _doctor_line("FAIL", "Config", str(exc))
+        return 1
+
+    path_info = describe_paths()
+    _doctor_line("OK", "User Data", str(path_info["home"]))
+
+    required_modules = {
+        "yaml": "PyYAML",
+        "numpy": "numpy",
+        "sounddevice": "sounddevice",
+        "pynput": "pynput",
+        "PyQt6": "PyQt6",
+        "torch": "torch",
+        "torchaudio": "torchaudio",
+        "speechbrain": "speechbrain",
+        "whisper": "openai-whisper",
+        "noisereduce": "noisereduce",
+        "webrtcvad": "webrtcvad",
+        "websocket": "websocket-client",
+    }
+    missing = [label for module_name, label in required_modules.items() if not _module_available(module_name)]
+    if missing:
+        failures += 1
+        _doctor_line("FAIL", "Dependencies", "Missing modules: " + ", ".join(sorted(missing)))
+    else:
+        _doctor_line("OK", "Dependencies", "All required Python modules are installed")
+
+    configured_device = str(config.get("audio", {}).get("device_name", "") or "").strip()
+    if _module_available("sounddevice"):
+        try:
+            import sounddevice as sd
+
+            devices = sd.query_devices()
+            input_devices = [
+                device["name"]
+                for device in devices
+                if device.get("max_input_channels", 0) > 0
+            ]
+            if not input_devices:
+                failures += 1
+                _doctor_line("FAIL", "Audio Input", "No input devices detected")
+            elif configured_device and any(
+                configured_device.lower() in device_name.lower() for device_name in input_devices
+            ):
+                _doctor_line("OK", "Audio Input", f"Matched configured device '{configured_device}'")
+            elif configured_device:
+                warnings += 1
+                preview = ", ".join(input_devices[:5])
+                _doctor_line(
+                    "WARN",
+                    "Audio Input",
+                    (
+                        f"Configured device '{configured_device}' not found. "
+                        f"Detected inputs: {preview}"
+                    ),
+                )
+            else:
+                _doctor_line("OK", "Audio Input", f"Detected {len(input_devices)} input device(s)")
+        except Exception as exc:
+            failures += 1
+            _doctor_line("FAIL", "Audio Input", f"Unable to query devices: {exc}")
+    else:
+        failures += 1
+        _doctor_line("FAIL", "Audio Input", "sounddevice is unavailable")
+
+    providers = _final_pass_providers(config)
+    deepgram_env = str(config.get("deepgram", {}).get("api_key_env", "DEEPGRAM_API_KEY"))
+    openai_env = str(config.get("openai", {}).get("api_key_env", "OPENAI_API_KEY"))
+
+    if "deepgram" in providers:
+        if os.getenv(deepgram_env):
+            _doctor_line("OK", "Deepgram", f"API key found in {deepgram_env}")
+        else:
+            warnings += 1
+            _doctor_line("WARN", "Deepgram", f"API key missing ({deepgram_env})")
+
+    if "openai" in providers:
+        if os.getenv(openai_env):
+            _doctor_line("OK", "OpenAI", f"API key found in {openai_env}")
+        else:
+            warnings += 1
+            _doctor_line("WARN", "OpenAI", f"API key missing ({openai_env})")
+
+    voice_cfg = config.get("voice_fingerprint", {})
+    voice_enabled = bool(voice_cfg.get("enabled", False))
+    voice_mode = str(voice_cfg.get("mode", "whisper") or "whisper").strip().lower()
+    profile_path = default_models_dir() / "voice_profile.pkl"
+    if voice_enabled and voice_mode != "talk":
+        if profile_path.exists():
+            _doctor_line("OK", "Voice Profile", f"Found enrolled profile at {profile_path}")
+        else:
+            warnings += 1
+            _doctor_line(
+                "WARN",
+                "Voice Profile",
+                f"No enrolled profile found. Run `{_cli_invocation()} --enroll` or use `--voice-mode talk`.",
+            )
+    else:
+        _doctor_line("OK", "Voice Profile", f"Voice verification bypassed (mode={voice_mode})")
+
+    personal_dictionary_path = resolve_personal_dictionary_path(config)
+    if personal_dictionary_path.exists():
+        _doctor_line("OK", "Personal Dictionary", str(personal_dictionary_path))
+    else:
+        warnings += 1
+        _doctor_line(
+            "WARN",
+            "Personal Dictionary",
+            (
+                f"File not found at {personal_dictionary_path}. "
+                f"Run `{_cli_invocation()} --init-personal-dictionary` if you want local vocabulary biasing."
+            ),
+        )
+
+    output_format = str(config.get("transcription", {}).get("output_format", "clipboard"))
+    auto_paste = bool(config.get("transcription", {}).get("auto_paste", False))
+    window_management_enabled = bool(config.get("window_management", {}).get("enabled", False))
+    is_macos = sys.platform == "darwin"
+
+    if is_macos:
+        missing_bins = []
+        if output_format in {"clipboard", "both"} and shutil.which("pbcopy") is None:
+            missing_bins.append("pbcopy")
+        if (auto_paste or window_management_enabled) and shutil.which("osascript") is None:
+            missing_bins.append("osascript")
+
+        if missing_bins:
+            failures += 1
+            _doctor_line("FAIL", "macOS Tools", "Missing: " + ", ".join(missing_bins))
+        else:
+            _doctor_line("OK", "macOS Tools", "pbcopy/osascript available")
+
+        warnings += 1
+        _doctor_line(
+            "WARN",
+            "Permissions",
+            "Microphone permission is required. Accessibility permission is also required for global hotkeys on macOS.",
+        )
+    else:
+        if window_management_enabled:
+            warnings += 1
+            _doctor_line(
+                "WARN",
+                "Window Management",
+                "window_management is enabled but current implementation is macOS-only.",
+            )
+        else:
+            _doctor_line("OK", "Platform Features", "macOS-only integrations are disabled")
+
+    if auto_paste:
+        warnings += 1
+        _doctor_line(
+            "WARN",
+            "Auto-paste",
+            "Enabled by default. This is convenient for demos but risky for first-time external users.",
+        )
+    else:
+        _doctor_line("OK", "Auto-paste", "Disabled")
+
+    print("\nNext steps:")
+    cli = _cli_invocation()
+    print(f"  1. Run `{cli} --list-devices` if your microphone is not detected.")
+    print(f"  2. Run `{cli} --enroll` before whisper mode.")
+    print(f"  3. Use `{cli} --voice-mode talk` for first-run smoke tests.")
+
+    if failures:
+        print(f"\nDoctor finished with {failures} failure(s) and {warnings} warning(s).")
+        return 1
+
+    print(f"\nDoctor finished with 0 failures and {warnings} warning(s).")
+    return 0
 
 
 class Bloviate:
@@ -55,13 +408,18 @@ class Bloviate:
 
     def __init__(self, config_path: str = "config.yaml", voice_mode_override: Optional[str] = None):
         # Load configuration
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+        self.config, _ = _load_config(config_path)
 
         self.voice_mode = self._resolve_voice_mode(voice_mode_override)
         self.talk_mode = self.voice_mode == "talk"
 
         # Initialize components
+        from audio_capture import AudioCapture
+        from noise_suppressor import NoiseSuppressor
+        from ptt_handler import PTTHandler
+        from transcriber import Transcriber
+        from voice_fingerprint import VoiceFingerprint
+
         self.audio_capture = AudioCapture(self.config)
         self.noise_suppressor = NoiseSuppressor(self.config)
         self.voice_fingerprint = VoiceFingerprint(self.config)
@@ -71,6 +429,8 @@ class Bloviate:
         # Window management
         self.window_manager = None
         if self.config.get('window_management', {}).get('enabled', False):
+            from window_manager import WindowManager
+
             self.window_manager = WindowManager()
 
         # State
@@ -648,6 +1008,8 @@ class Bloviate:
         print("Press Ctrl+C to exit.\n")
 
         # Create UI
+        from ui import create_ui
+
         self.ui_app, self.ui_window = create_ui(self.config)
         if self.talk_mode and self.ui_window:
             self.ui_window.signals.update_voice_match.emit(True, -1.0)
@@ -738,7 +1100,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='config.yaml',
+        default=str(default_user_config_path()),
         help='Path to configuration file'
     )
     parser.add_argument(
@@ -766,14 +1128,45 @@ def main():
         dest='show_personal_dictionary',
         help='Show the local personal dictionary and exit'
     )
+    parser.add_argument(
+        '--list-devices',
+        action='store_true',
+        help='List available audio input devices and exit'
+    )
+    parser.add_argument(
+        '--doctor',
+        action='store_true',
+        help='Run environment and configuration checks and exit'
+    )
+    parser.add_argument(
+        '--show-paths',
+        action='store_true',
+        help='Show the current config/data paths and exit'
+    )
+    parser.add_argument(
+        '--init-personal-dictionary',
+        action='store_true',
+        help='Create a personal dictionary file from the packaged example and exit'
+    )
 
     args = parser.parse_args()
 
-    # Change to project directory
-    project_dir = Path(__file__).parent.parent
-    os.chdir(project_dir)
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f) or {}
+    if args.show_paths:
+        sys.exit(show_paths())
+
+    if args.doctor:
+        sys.exit(run_doctor(args.config))
+
+    config, _ = _load_config(
+        args.config,
+        allow_missing=args.list_devices,
+    )
+
+    if args.list_devices:
+        sys.exit(list_audio_devices(config))
+
+    if args.init_personal_dictionary:
+        sys.exit(init_personal_dictionary(config))
 
     if args.add_term:
         path, added = add_preferred_terms(config, args.add_term)

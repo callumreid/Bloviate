@@ -44,7 +44,7 @@ transcription:
   include_command_vocabulary: true  # Bias command-mode transcription toward built-in voice commands
   prompt_max_terms: 40  # Keep automatic prompting concise so it helps more than it over-biases
   prompt_max_chars: 600  # Hard cap for generated prompt length
-  personal_dictionary_path: "personal_dictionary.yaml"  # Stored in the user app data dir by default
+  personal_dictionary_path: "personal_dictionary.yaml"  # Stored in user app data by default
   learned_terms_path: "learned_terms.txt"  # Legacy fallback for old learned-terms files
   final_pass_provider_priority:  # Try providers in this order for final text
     - "openai"

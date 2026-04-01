@@ -60,6 +60,14 @@ from typing import Optional, List
 import os
 import pickle
 from pathlib import Path
+import shutil
+
+from app_paths import (
+    config_base_dir,
+    legacy_repo_voice_profile_path,
+    models_dir as default_models_dir,
+    resolve_path,
+)
 
 
 class VoiceFingerprint:
@@ -68,7 +76,7 @@ class VoiceFingerprint:
     Only accepts audio matching the enrolled voice profile.
     """
 
-    def __init__(self, config: dict, model_dir: str = "models"):
+    def __init__(self, config: dict, model_dir: Optional[str] = None):
         self.config = config
         self.enabled = config['voice_fingerprint']['enabled']
         self.threshold = config['voice_fingerprint']['threshold']
@@ -76,10 +84,22 @@ class VoiceFingerprint:
         self.model_name = config['voice_fingerprint']['embedding_model']
         self.min_enrollment_samples = config['voice_fingerprint']['min_enrollment_samples']
 
-        self.model_dir = Path(model_dir)
-        self.model_dir.mkdir(exist_ok=True)
+        configured_model_dir = (
+            model_dir
+            or config.get("voice_fingerprint", {}).get("model_dir")
+            or os.getenv("BLOVIATE_MODEL_DIR")
+        )
+        if configured_model_dir:
+            self.model_dir = resolve_path(
+                str(configured_model_dir),
+                base_dir=config_base_dir(config),
+            )
+        else:
+            self.model_dir = default_models_dir()
+        self.model_dir.mkdir(parents=True, exist_ok=True)
 
         self.profile_path = self.model_dir / "voice_profile.pkl"
+        self.legacy_profile_path = legacy_repo_voice_profile_path()
 
         # Load speaker embedding model
         print("Loading speaker embedding model...")
@@ -242,6 +262,7 @@ class VoiceFingerprint:
             'threshold': self.threshold,
         }
 
+        self.profile_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.profile_path, 'wb') as f:
             pickle.dump(profile_data, f)
 
@@ -249,16 +270,24 @@ class VoiceFingerprint:
 
     def load_profile(self) -> bool:
         """Load existing voice profile from disk."""
-        if not self.profile_path.exists():
+        source_path = self.profile_path
+        if not source_path.exists() and self.legacy_profile_path.exists():
+            source_path = self.legacy_profile_path
+
+        if not source_path.exists():
             print("No existing voice profile found")
             return False
 
         try:
-            with open(self.profile_path, 'rb') as f:
+            with open(source_path, 'rb') as f:
                 profile_data = pickle.load(f)
 
             self.enrolled_embeddings = profile_data['embeddings']
             self.reference_embedding = profile_data['reference']
+            if source_path != self.profile_path:
+                self.profile_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, self.profile_path)
+                print(f"Migrated voice profile to {self.profile_path}")
             print(f"Voice profile loaded: {len(self.enrolled_embeddings)} samples")
             return True
 

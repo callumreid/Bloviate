@@ -13,19 +13,28 @@ cd bloviate
 source venv/bin/activate
 ```
 
-3. Optional: create your personal dictionary file:
+The setup installs a `bloviate` CLI into that environment, but the repo-local `python src/main.py ...` commands still work too.
+
+3. Run the built-in preflight:
 ```bash
-cp personal_dictionary.example.yaml personal_dictionary.yaml
+python src/main.py --doctor
+python src/main.py --list-devices
 ```
 
-`personal_dictionary.yaml` is gitignored, so collaborators do not get each other's entries when they clone the repo.
+4. Optional: create your personal dictionary file:
+```bash
+python src/main.py --init-personal-dictionary
+```
 
-4. Optional: add preferred terms for names, tools, and commands you use a lot:
+Bloviate stores per-user state under `~/Library/Application Support/Bloviate` on macOS by default.
+Run `python src/main.py --show-paths` if you want to confirm the exact locations.
+
+5. Optional: add preferred terms for names, tools, and commands you use a lot:
 ```bash
 python src/main.py --add-term "Raycast" --add-term "kubectl" --add-term "gpt-4o-transcribe"
 ```
 
-This writes to `personal_dictionary.yaml` locally and keeps it out of git.
+This writes to your local personal dictionary in the app data directory and keeps it out of git.
 
 ## First Time Setup: Voice Enrollment
 
@@ -40,12 +49,18 @@ You'll be prompted to whisper 5 phrases. Make sure to:
 - Use the same microphone (Tascam TM-95GN)
 - Be in a quiet moment (less background noise is better for enrollment)
 
-The system will create a voice profile at `models/voice_profile.pkl`.
+The system will create a voice profile in the app data directory, typically `~/Library/Application Support/Bloviate/models/voice_profile.pkl` on macOS.
 
 ## Running Bloviate
 
 ```bash
 python src/main.py
+```
+
+For a first-run smoke test without voice enrollment, use:
+
+```bash
+python src/main.py --voice-mode talk
 ```
 
 A small window will appear showing:
@@ -65,7 +80,9 @@ The transcribed text will be:
 - Copied to your clipboard (ready to paste)
 - Displayed in the UI window
 
-### Window Management (Voice Commands)
+### Window Management (Optional)
+
+Window management is disabled by default for safer first-run behavior. Enable it in `config.yaml` if you want voice-driven window commands.
 
 1. Press and hold `Ctrl+Cmd`
 2. Say "left", "right", "top", or "bottom"
@@ -130,7 +147,7 @@ audio:
   device_name: "Scarlett"  # Change if using different interface
 ```
 
-Run `python -c "import sounddevice as sd; print(sd.query_devices())"` to see all available devices.
+Run `python src/main.py --list-devices` to see all available input devices.
 
 ### Change Whisper Model
 ```yaml
@@ -144,7 +161,7 @@ transcription:
 - `medium.en` - Most accurate, slowest
 
 ### Personal Dictionary
-Bloviate looks for a local `personal_dictionary.yaml` in the repo root by default. It can hold both preferred terms and correction rules. To keep that file outside the repo, set either:
+Bloviate stores `personal_dictionary.yaml` in the app data directory by default. It can hold both preferred terms and correction rules. To override that location, set either:
 
 ```yaml
 transcription:
@@ -246,7 +263,7 @@ Tips for better enrollment:
 - Check that your Scarlett is connected and powered on
 - Verify the TM-95GN is plugged into the Scarlett
 - Check phantom power is enabled on the Scarlett if needed
-- Run the device list command to verify it's detected
+- Run `python src/main.py --list-devices` to verify the microphone is detected
 
 ### "Voice rejected" on every attempt
 - Lower the `voice_fingerprint.threshold` in config.yaml
@@ -257,6 +274,11 @@ Tips for better enrollment:
 - Increase `voice_fingerprint.threshold` to 0.70 or 0.75
 - Re-enroll with more samples (modify `min_enrollment_samples` in config)
 - Increase `vad_aggressiveness` to filter out more background
+
+### "It works on your machine but not mine"
+- Run `python src/main.py --doctor` and fix every `FAIL` first
+- Use `python src/main.py --voice-mode talk` before testing voice verification
+- On macOS, grant microphone and accessibility permissions to Terminal/iTerm or the packaged app
 
 ### Transcription is inaccurate
 - Use a larger Whisper model (small.en or medium.en)

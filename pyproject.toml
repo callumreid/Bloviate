@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bloviate"
+version = "0.1.0"
+description = "Voice-fingerprinting dictation tool for whispering in noisy environments"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24.0",
+  "sounddevice>=0.4.6",
+  "scipy>=1.10.0",
+  "pynput>=1.7.6",
+  "torch>=2.0.0,<2.5.0",
+  "torchaudio>=2.0.0,<2.5.0",
+  "speechbrain==1.0.0",
+  "noisereduce>=3.0.0",
+  "pyqt6>=6.5.0",
+  "openai-whisper>=20231117",
+  "pyyaml>=6.0",
+  "webrtcvad>=2.0.10",
+  "websocket-client>=1.7.0",
+]
+
+[project.scripts]
+bloviate = "main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = [
+  "app_paths",
+  "audio_capture",
+  "command_vocabulary",
+  "deepgram_stream",
+  "main",
+  "noise_suppressor",
+  "personal_dictionary",
+  "ptt_handler",
+  "torchaudio_patch",
+  "transcriber",
+  "ui",
+  "voice_fingerprint",
+  "window_manager",
+]
+packages = ["bloviate_resources"]
+
+[tool.setuptools.package-data]
+bloviate_resources = ["*.yaml"]

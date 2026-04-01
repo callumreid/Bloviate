@@ -35,13 +35,17 @@ pip install --upgrade pip
 # Install dependencies
 echo "Installing dependencies..."
 echo "This may take several minutes..."
-pip install -r requirements.txt
+pip install -e .
 
 echo
 echo "=== Setup Complete ==="
 echo
 echo "Next steps:"
 echo "1. Activate the virtual environment: source venv/bin/activate"
-echo "2. Enroll your voice: python src/main.py --enroll"
-echo "3. Run Bloviate: python src/main.py"
+echo "2. Run the preflight: bloviate --doctor"
+echo "3. Show install paths: bloviate --show-paths"
+echo "4. List microphones if needed: bloviate --list-devices"
+echo "5. Smoke test without enrollment: bloviate --voice-mode talk"
+echo "6. Enroll your voice: bloviate --enroll"
+echo "7. Run Bloviate: bloviate"
 echo

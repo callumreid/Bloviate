@@ -536,7 +536,7 @@ class Transcriber:
         return []
 
     def _build_prompt_terms(self) -> List[str]:
-        """Build prompt terms from config and custom dictionary phrases."""
+        """Build prompt terms from explicit config plus preferred vocabulary only."""
         terms: List[str] = []
         seen = set()
 
@@ -545,9 +545,6 @@ class Transcriber:
 
         for term in self._coerce_string_list(self.deepgram_config.get("keyterm")):
             self._append_unique_term(terms, seen, term)
-
-        for entry in self.custom_dictionary:
-            self._append_unique_term(terms, seen, entry.get("phrase", ""))
 
         for term in self.learned_terms:
             self._append_unique_term(terms, seen, term)
@@ -566,16 +563,12 @@ class Transcriber:
         return terms
 
     def _build_deepgram_bias_terms(self) -> List[str]:
-        """Build base Deepgram bias terms from config plus custom dictionary phrases."""
+        """Build base Deepgram bias terms from config plus preferred vocabulary."""
         terms: List[str] = []
         seen = set()
 
         for term in self._coerce_string_list(self.deepgram_config.get("keyterm")):
             self._append_unique_term(terms, seen, term, max_length=80)
-
-        if self.deepgram_config.get("include_dictionary_keyterms", True):
-            for entry in self.custom_dictionary:
-                self._append_unique_term(terms, seen, entry.get("phrase", ""), max_length=80)
 
         for term in self.learned_terms:
             self._append_unique_term(terms, seen, term, max_length=80)

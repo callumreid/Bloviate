@@ -14,29 +14,34 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 import yaml
+from app_paths import (
+    app_support_dir,
+    config_base_dir,
+    custom_dictionary_path,
+    learned_terms_path,
+    legacy_repo_custom_dictionary_path,
+    legacy_repo_learned_terms_path,
+    legacy_repo_personal_dictionary_path,
+    personal_dictionary_path,
+    resolve_path,
+)
 
 
 DEFAULT_PERSONAL_DICTIONARY_FILE = "personal_dictionary.yaml"
 DEFAULT_LEARNED_TERMS_FILE = "learned_terms.txt"
 DEFAULT_CUSTOM_DICTIONARY_FILE = "custom_dictionary.yaml"
 
-
-def _project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
-
-
-def _resolve_path(raw_path: str) -> Path:
-    path = Path(str(raw_path)).expanduser()
-    if not path.is_absolute():
-        path = _project_root() / path
-    return path
-
-
 def _resolve_config_path(config: dict, config_key: str, env_name: str, default_file: str) -> Path:
     raw_path = config.get("transcription", {}).get(config_key) or os.getenv(env_name)
     if raw_path:
-        return _resolve_path(str(raw_path))
-    return _project_root() / default_file
+        return resolve_path(str(raw_path), base_dir=config_base_dir(config))
+    if default_file == DEFAULT_PERSONAL_DICTIONARY_FILE:
+        return personal_dictionary_path()
+    if default_file == DEFAULT_LEARNED_TERMS_FILE:
+        return learned_terms_path()
+    if default_file == DEFAULT_CUSTOM_DICTIONARY_FILE:
+        return custom_dictionary_path()
+    return app_support_dir() / default_file
 
 
 def normalize_term(value: str) -> str:
@@ -224,6 +229,35 @@ def load_personal_dictionary(config: dict) -> Dict[str, List]:
             add_term(term)
         if len(preferred_terms) > before:
             sources.append(str(legacy_learned_path))
+
+    repo_personal_path = legacy_repo_personal_dictionary_path()
+    if repo_personal_path.exists() and repo_personal_path != primary_path:
+        data = _load_yaml(repo_personal_path)
+        before_terms = len(preferred_terms)
+        before_corrections = len(corrections)
+        for term in _extract_terms(data):
+            add_term(term)
+        for correction in _extract_corrections(data):
+            add_correction(correction)
+        if len(preferred_terms) > before_terms or len(corrections) > before_corrections:
+            sources.append(str(repo_personal_path))
+
+    repo_custom_path = legacy_repo_custom_dictionary_path()
+    if repo_custom_path.exists() and repo_custom_path != legacy_custom_path:
+        before = len(corrections)
+        data = _load_yaml(repo_custom_path)
+        for correction in _extract_corrections(data):
+            add_correction(correction)
+        if len(corrections) > before:
+            sources.append(str(repo_custom_path))
+
+    repo_learned_path = legacy_repo_learned_terms_path()
+    if repo_learned_path.exists() and repo_learned_path != legacy_learned_path:
+        before = len(preferred_terms)
+        for term in _load_terms_txt(repo_learned_path):
+            add_term(term)
+        if len(preferred_terms) > before:
+            sources.append(str(repo_learned_path))
 
     return {
         "preferred_terms": preferred_terms,
