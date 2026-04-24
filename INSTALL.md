@@ -32,7 +32,14 @@ Upgrade/reinstall after a new push:
 
 ```bash
 brew update
-brew reinstall --HEAD callumreid/bloviate/bloviate
+brew upgrade --fetch-HEAD callumreid/bloviate/bloviate
+```
+
+Create a clickable app launcher after install:
+
+```bash
+bloviate --install-launcher
+open ~/Applications/Bloviate.app
 ```
 
 Remove:
@@ -42,7 +49,7 @@ brew uninstall bloviate
 brew untap callumreid/bloviate
 ```
 
-This formula is intended for beta testing. It builds a Homebrew-managed Python virtualenv and installs Bloviate into it.
+This formula is intended for beta testing. It builds a Homebrew-managed Python virtualenv and installs Bloviate into it. The launcher command creates a local `.app` wrapper around the installed `bloviate` binary; it is not signed/notarized yet.
 
 Smoke test without voice enrollment:
 

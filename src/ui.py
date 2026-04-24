@@ -6,7 +6,7 @@ Shows audio levels, voice detection status, and PTT state.
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QProgressBar, QSystemTrayIcon, QMenu,
-    QComboBox, QPushButton, QFrame, QTabWidget, QGroupBox,
+    QComboBox, QPushButton, QFrame, QStackedWidget, QGroupBox,
     QSlider, QCheckBox, QMessageBox, QScrollArea, QLineEdit,
     QTextEdit, QFormLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QFileDialog
@@ -754,14 +754,34 @@ class BloviateUI(QMainWindow):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         central_widget.setLayout(layout)
-        self.tabs = QTabWidget()
+        nav = QWidget()
+        nav.setObjectName("TopNav")
+        nav_layout = QHBoxLayout(nav)
+        nav_layout.setContentsMargins(0, 18, 0, 10)
+        nav_layout.setSpacing(0)
+        nav_layout.addStretch()
+        self.status_nav_button = QPushButton("Status")
+        self.settings_nav_button = QPushButton("Settings")
+        for button in (self.status_nav_button, self.settings_nav_button):
+            button.setObjectName("NavButton")
+            button.setCheckable(True)
+            button.setMinimumWidth(140)
+        nav_layout.addWidget(self.status_nav_button)
+        nav_layout.addWidget(self.settings_nav_button)
+        nav_layout.addStretch()
+        layout.addWidget(nav)
+
+        self.tabs = QStackedWidget()
         layout.addWidget(self.tabs)
         self.status_tab = QWidget()
         self.settings_tab = QWidget()
-        self.tabs.addTab(self.status_tab, "Status")
-        self.tabs.addTab(self.settings_tab, "Settings")
+        self.tabs.addWidget(self.status_tab)
+        self.tabs.addWidget(self.settings_tab)
+        self.status_nav_button.clicked.connect(self.show_status_tab)
+        self.settings_nav_button.clicked.connect(self.show_settings_tab)
         self._build_status_tab()
         self._build_settings_tab()
+        self._select_main_page(self.status_tab)
         self._refresh_audio_inputs()
         self._refresh_voice_controls()
         self._refresh_dictionary_path()
@@ -2001,12 +2021,26 @@ class BloviateUI(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
-        if hasattr(self, "tabs"):
-            self.tabs.setCurrentWidget(self.settings_tab)
+        self._select_main_page(self.settings_tab)
         self._refresh_voice_controls()
         self._refresh_dictionary_path()
         self._load_dictionary_editor()
         self._refresh_history()
+
+    def show_status_tab(self):
+        """Bring the status tab into focus."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._select_main_page(self.status_tab)
+
+    def _select_main_page(self, page: QWidget):
+        if hasattr(self, "tabs"):
+            self.tabs.setCurrentWidget(page)
+        if hasattr(self, "status_nav_button"):
+            self.status_nav_button.setChecked(page is self.status_tab)
+        if hasattr(self, "settings_nav_button"):
+            self.settings_nav_button.setChecked(page is self.settings_tab)
 
     def request_quit(self):
         """Mark the window as closing and quit the app."""
@@ -2040,32 +2074,33 @@ class BloviateUI(QMainWindow):
         QApplication.instance().setPalette(palette)
         self.setStyleSheet(
             """
-            QMainWindow, QWidget#AppRoot, QWidget#SettingsContent, QTabWidget::pane {
+            QMainWindow, QWidget#AppRoot, QWidget#SettingsContent, QStackedWidget {
                 background: #F7F3EA;
                 color: #26211D;
             }
-            QTabWidget::pane {
-                border: 0;
-                top: -1px;
-            }
-            QTabBar {
+            QWidget#TopNav {
                 background: #F7F3EA;
             }
-            QTabBar::tab {
+            QPushButton#NavButton {
                 background: #E8DFD0;
                 color: #37312B;
-                min-width: 108px;
-                padding: 8px 18px;
+                min-width: 140px;
+                padding: 13px 24px;
                 border: 1px solid #D8CCBA;
-                border-bottom: 0;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                margin-top: 10px;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: 700;
             }
-            QTabBar::tab:selected {
+            QPushButton#NavButton:checked {
                 background: #2D6B6B;
-                color: white;
+                color: #FFFFFF;
                 border-color: #2D6B6B;
+            }
+            QPushButton#NavButton:hover {
+                background: #DCD2C2;
+            }
+            QPushButton#NavButton:checked:hover {
+                background: #2D6B6B;
             }
             QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
                 background: #F7F3EA;

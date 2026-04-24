@@ -14,6 +14,7 @@ import os
 import platform
 import subprocess
 import shutil
+import shlex
 import sys
 import threading
 import time
@@ -1776,6 +1777,69 @@ class Bloviate:
         return exit_code
 
 
+def install_macos_launcher() -> int:
+    """Create a small .app wrapper around the current bloviate command."""
+    if sys.platform != "darwin":
+        print("--install-launcher is only supported on macOS.")
+        return 1
+
+    command = shutil.which("bloviate") or sys.argv[0]
+    command_path = Path(command).expanduser()
+    if not command_path.is_absolute():
+        command_path = (Path.cwd() / command_path).resolve()
+
+    app_dir = Path.home() / "Applications" / "Bloviate.app"
+    contents_dir = app_dir / "Contents"
+    macos_dir = contents_dir / "MacOS"
+    macos_dir.mkdir(parents=True, exist_ok=True)
+
+    executable = macos_dir / "Bloviate"
+    launch_script = f"""#!/bin/zsh
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+exec {shlex.quote(str(command_path))} "$@"
+"""
+    executable.write_text(launch_script, encoding="utf-8")
+    executable.chmod(0o755)
+
+    plist = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>Bloviate</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.callumreid.bloviate</string>
+  <key>CFBundleName</key>
+  <string>Bloviate</string>
+  <key>CFBundleDisplayName</key>
+  <string>Bloviate</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.2.0</string>
+  <key>CFBundleVersion</key>
+  <string>0.2.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Bloviate uses the microphone to capture push-to-talk dictation.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Bloviate uses Apple Events to identify the active window and paste transcribed text.</string>
+</dict>
+</plist>
+"""
+    (contents_dir / "Info.plist").write_text(plist, encoding="utf-8")
+    (contents_dir / "PkgInfo").write_text("APPL????", encoding="utf-8")
+
+    print(f"Installed launcher: {app_dir}")
+    print(f"Target command: {command_path}")
+    print(f"Open it with: open {shlex.quote(str(app_dir))}")
+    return 0
+
+
 def main():
     """Main entry point."""
     _load_dotenv()
@@ -1841,8 +1905,16 @@ def main():
         action='store_true',
         help='Create a personal dictionary file from the packaged example and exit'
     )
+    parser.add_argument(
+        '--install-launcher',
+        action='store_true',
+        help='Create ~/Applications/Bloviate.app so Bloviate can launch without a terminal'
+    )
 
     args = parser.parse_args()
+
+    if args.install_launcher:
+        sys.exit(install_macos_launcher())
 
     if args.show_paths:
         sys.exit(show_paths())

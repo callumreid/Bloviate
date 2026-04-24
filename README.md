@@ -28,6 +28,7 @@ Homebrew HEAD install for beta E2E testing:
 ```bash
 brew tap callumreid/bloviate https://github.com/callumreid/Bloviate
 brew install --HEAD callumreid/bloviate/bloviate
+bloviate --install-launcher
 ```
 
 See [INSTALL.md](/Users/bronson/personal/bloviate/INSTALL.md) for beta install, permissions, upgrades, and the signed-app roadmap.
@@ -41,7 +42,7 @@ bloviate --list-devices
 bloviate --voice-mode talk
 ```
 
-Then open Settings from the window or menu bar icon and configure:
+Then open Settings from the window or menu bar icon and configure. After `bloviate --install-launcher`, you can start Bloviate from `~/Applications/Bloviate.app` instead of a terminal.
 
 - microphone
 - push-to-talk hotkey

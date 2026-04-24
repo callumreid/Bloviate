@@ -20,6 +20,15 @@ class Bloviate < Formula
     bin.write_exec_script venv/"bin/bloviate"
   end
 
+  def caveats
+    <<~EOS
+      To launch Bloviate without a terminal, create a local app wrapper:
+        bloviate --install-launcher
+
+      Then open ~/Applications/Bloviate.app from Finder, Spotlight, or `open`.
+    EOS
+  end
+
   test do
     assert_match "--doctor", shell_output("#{bin}/bloviate --help")
   end
