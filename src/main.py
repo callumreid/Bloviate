@@ -362,6 +362,7 @@ def run_doctor(config_path: str) -> int:
     _doctor_line("OK", "User Data", str(path_info["home"]))
 
     required_modules = {
+        "pkg_resources": "setuptools",
         "yaml": "PyYAML",
         "numpy": "numpy",
         "sounddevice": "sounddevice",
