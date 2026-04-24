@@ -38,6 +38,7 @@ class SecretStatus:
     has_keychain_key: bool
     has_env_key: bool
     source: str
+    redacted_value: str = ""
 
 
 class SecretStore:
@@ -117,6 +118,7 @@ class SecretStore:
             source = "keychain"
         elif has_env_key:
             source = "environment"
+        redacted_value = self.redacted_api_key(normalized, config) if source != "missing" else ""
         return SecretStatus(
             provider=normalized,
             env_name=env_name,
@@ -124,10 +126,27 @@ class SecretStore:
             has_keychain_key=has_keychain_key,
             has_env_key=has_env_key,
             source=source,
+            redacted_value=redacted_value,
         )
+
+    def redacted_api_key(self, provider: str, config: Optional[dict] = None) -> str:
+        """Return a display-safe representation of the resolved key."""
+        value = self.get_api_key(provider, config)
+        if not value:
+            return ""
+        return self._redact(value)
 
     @staticmethod
     def _normalize_provider(provider: str) -> str:
         value = str(provider or "").strip().lower()
         aliases = {"openai-stt": "openai", "dg": "deepgram"}
         return aliases.get(value, value)
+
+    @staticmethod
+    def _redact(value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            return ""
+        if len(value) <= 8:
+            return "configured"
+        return f"{value[:4]}...{value[-4:]}"

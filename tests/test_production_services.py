@@ -16,7 +16,7 @@ from model_registry import ModelRegistry
 from personal_dictionary import load_personal_dictionary, save_personal_dictionary
 from post_processor import PostProcessor
 from secret_store import SecretStore
-from settings_service import SettingsService
+from settings_service import SettingsService, load_yaml_config
 
 
 class FakeKeyring:
@@ -48,6 +48,17 @@ class ProductionServiceTests(unittest.TestCase):
             saved = config_path.read_text(encoding="utf-8")
             self.assertIn("hotkey: <ctrl>+<space>", saved)
             self.assertNotIn("__config_path__", saved)
+
+    def test_load_config_merges_defaults_and_migrates_old_dark_theme(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "config.yaml"
+            config_path.write_text("ui:\n  theme: dark\nptt: {}\n", encoding="utf-8")
+
+            config, _ = load_yaml_config(config_path)
+
+            self.assertEqual(config["ui"]["theme"], "light")
+            self.assertEqual(config["ptt"]["hotkey"], "<cmd>+<option>")
+            self.assertTrue(config["history"]["enabled"])
 
     def test_history_store_insert_search_delete_export(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -87,6 +98,7 @@ class ProductionServiceTests(unittest.TestCase):
             ok, _ = store.set_api_key("openai", "keychain-key")
             self.assertTrue(ok)
             self.assertEqual(store.get_api_key("openai", config), "keychain-key")
+            self.assertEqual(store.status("openai", config).redacted_value, "keyc...-key")
 
             config["openai"]["api_key"] = "config-key"
             self.assertEqual(store.get_api_key("openai", config), "config-key")

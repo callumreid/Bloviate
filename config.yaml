@@ -125,7 +125,7 @@ ui:
   show_waveform: true
   show_metrics: true
   window_size: [400, 200]
-  theme: "dark"
+  theme: "light"
   interim_update_interval_s: 0.15
   show_menubar_indicator: true  # Show status in macOS menu bar
   show_main_window: false  # Hide the debug/status window by default

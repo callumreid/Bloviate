@@ -14,7 +14,11 @@ from typing import Any, Iterable
 
 import yaml
 
-from app_paths import config_path as default_user_config_path, ensure_default_config
+from app_paths import (
+    config_path as default_user_config_path,
+    ensure_default_config,
+    read_resource_text,
+)
 
 
 RUNTIME_KEY_PREFIX = "__"
@@ -96,6 +100,53 @@ def save_config(config: dict) -> Path:
     return SettingsService(config).save()
 
 
+def _load_packaged_defaults() -> dict:
+    try:
+        return yaml.safe_load(read_resource_text("default_config.yaml")) or {}
+    except Exception:
+        return {}
+
+
+def _deep_merge_missing(config: Any, defaults: Any) -> Any:
+    """Fill missing config keys from packaged defaults without overwriting values."""
+    if not isinstance(config, dict) or not isinstance(defaults, dict):
+        return config
+    for key, default_value in defaults.items():
+        if key not in config:
+            config[key] = deepcopy(default_value)
+        elif isinstance(config[key], dict) and isinstance(default_value, dict):
+            _deep_merge_missing(config[key], default_value)
+    return config
+
+
+def _config_section(data: dict, key: str) -> dict:
+    section = data.get(key)
+    if not isinstance(section, dict):
+        section = {}
+        data[key] = section
+    return section
+
+
+def _migrate_config(data: dict) -> dict:
+    """Apply small compatibility migrations for existing user configs."""
+    ui_config = _config_section(data, "ui")
+    if str(ui_config.get("theme", "")).strip().lower() == "dark":
+        ui_config["theme"] = "light"
+    ptt_config = _config_section(data, "ptt")
+    if not str(ptt_config.get("hotkey", "") or "").strip():
+        ptt_config["hotkey"] = "<cmd>+<option>"
+    if not str(ptt_config.get("secondary_hotkey", "") or "").strip():
+        ptt_config["secondary_hotkey"] = "<fn>"
+    window_config = _config_section(data, "window_management")
+    if not str(window_config.get("hotkey_prefix", "") or "").strip():
+        window_config["hotkey_prefix"] = "<ctrl>+<cmd>"
+    if not str(window_config.get("command_hotkey", "") or "").strip():
+        window_config["command_hotkey"] = "<ctrl>+<cmd>"
+    history_config = _config_section(data, "history")
+    history_config["enabled"] = bool(history_config.get("enabled", True))
+    return data
+
+
 def load_yaml_config(path: str | Path, *, allow_missing: bool = False) -> tuple[dict, Path]:
     """Load a YAML config and attach runtime metadata."""
     resolved = Path(path).expanduser()
@@ -115,6 +166,11 @@ def load_yaml_config(path: str | Path, *, allow_missing: bool = False) -> tuple[
 
     with open(resolved, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
+
+    defaults = _load_packaged_defaults()
+    if defaults:
+        data = _deep_merge_missing(data, defaults)
+    data = _migrate_config(data)
 
     data["__config_path__"] = str(resolved)
     data["__config_dir__"] = str(resolved.parent)

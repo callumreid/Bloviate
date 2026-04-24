@@ -15,7 +15,6 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QS
 from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter
 import sys
 import numpy as np
-import yaml
 
 
 class UISignals(QObject):
@@ -728,9 +727,11 @@ class BloviateUI(QMainWindow):
         self._transcription_style_final = ""
         self._transcription_style_interim = ""
         self._audio_inputs_ready = bool(self.get_audio_inputs and self.set_audio_input)
-        self._settings_status_default_style = "font-size: 12px; color: #9E9E9E;"
-        self._settings_ok_style = "font-size: 12px; color: #8BC34A;"
-        self._settings_error_style = "font-size: 12px; color: #EF5350;"
+        self._settings_status_default_style = "font-size: 12px; color: #6F665E;"
+        self._settings_ok_style = "font-size: 12px; color: #2F7D4F; font-weight: 600;"
+        self._settings_error_style = "font-size: 12px; color: #B23B35; font-weight: 600;"
+        self._dictionary_terms = []
+        self._dictionary_corrections = []
 
         self.init_ui()
 
@@ -742,16 +743,16 @@ class BloviateUI(QMainWindow):
         width, height = self.config['ui']['window_size']
         self.resize(max(width, 520), max(height, 420))
 
-        # Apply dark theme
-        if self.config['ui']['theme'] == 'dark':
-            self.set_dark_theme()
+        self.set_light_theme()
 
         # Central widget
         central_widget = QWidget()
+        central_widget.setObjectName("AppRoot")
         self.setCentralWidget(central_widget)
 
         # Main layout
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         central_widget.setLayout(layout)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
@@ -767,18 +768,22 @@ class BloviateUI(QMainWindow):
 
     def _build_status_tab(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(30, 26, 30, 30)
+        layout.setSpacing(16)
         self.status_tab.setLayout(layout)
 
         # PTT Status
         self.ptt_label = QLabel("PTT: Inactive")
         self.ptt_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.ptt_label.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px;")
+        self.ptt_label.setObjectName("StatusPill")
+        self.ptt_label.setStyleSheet(self._status_pill_style("#E9E1D3", "#24201C"))
         layout.addWidget(self.ptt_label)
 
         # Command Mode Status
         self.command_label = QLabel("CMD: Inactive")
         self.command_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.command_label.setStyleSheet("font-size: 14px; font-weight: bold; padding: 6px;")
+        self.command_label.setObjectName("StatusPill")
+        self.command_label.setStyleSheet(self._status_pill_style("#E9E1D3", "#24201C"))
         layout.addWidget(self.command_label)
 
         # Audio Level
@@ -805,18 +810,20 @@ class BloviateUI(QMainWindow):
         # Status message
         self.status_label = QLabel("Ready")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("font-style: italic; color: gray;")
+        self.status_label.setStyleSheet("font-style: italic; color: #6F665E; padding: 8px;")
         layout.addWidget(self.status_label)
 
         # Last transcription
         self.transcription_label = QLabel("")
         self.transcription_label.setWordWrap(True)
         self._transcription_style_final = (
-            "padding: 10px; background-color: #2a2a2a; border-radius: 5px; min-height: 40px;"
+            "padding: 14px; background-color: #FFFDF7; color: #26211D; "
+            "border: 1px solid #DDD2C1; border-radius: 8px; min-height: 52px;"
         )
         self._transcription_style_interim = (
-            "padding: 10px; background-color: #2a2a2a; border-radius: 5px; min-height: 40px; "
-            "color: #9E9E9E; font-style: italic;"
+            "padding: 14px; background-color: #FFF9E9; color: #7A5B2C; "
+            "border: 1px solid #E3C88A; border-radius: 8px; min-height: 52px; "
+            "font-style: italic;"
         )
         self.transcription_label.setStyleSheet(self._transcription_style_final)
         layout.addWidget(self.transcription_label)
@@ -824,13 +831,18 @@ class BloviateUI(QMainWindow):
 
     def _build_settings_tab(self):
         outer_layout = QVBoxLayout()
+        outer_layout.setContentsMargins(0, 0, 0, 0)
         self.settings_tab.setLayout(outer_layout)
         scroll = QScrollArea()
+        scroll.setObjectName("SettingsScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.viewport().setStyleSheet("background-color: #F7F3EA;")
         content = QWidget()
+        content.setObjectName("SettingsContent")
         layout = QVBoxLayout(content)
-        layout.setSpacing(12)
+        layout.setContentsMargins(28, 26, 28, 30)
+        layout.setSpacing(16)
         scroll.setWidget(content)
         outer_layout.addWidget(scroll)
 
@@ -858,25 +870,26 @@ class BloviateUI(QMainWindow):
         self.apply_device_button.clicked.connect(self._apply_selected_audio_input)
 
         # Hotkeys
-        hotkey_group = QGroupBox("Input & Hotkeys")
+        hotkey_group = QGroupBox("Input && Hotkeys")
         hotkey_layout = QFormLayout(hotkey_group)
-        self.ptt_hotkey_edit = QLineEdit(str(self.config.get("ptt", {}).get("hotkey", "")))
-        self.ptt_secondary_hotkey_edit = QLineEdit(
-            str(self.config.get("ptt", {}).get("secondary_hotkey", ""))
-        )
+        hotkey_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self.ptt_hotkey_edit = QLineEdit(self._config_text("ptt", "hotkey", "<cmd>+<option>"))
+        self.ptt_secondary_hotkey_edit = QLineEdit(self._config_text("ptt", "secondary_hotkey", "<fn>"))
         self.command_hotkey_edit = QLineEdit(
-            str(self.config.get("window_management", {}).get("command_hotkey", ""))
+            self._config_text("window_management", "command_hotkey", "<ctrl>+<cmd>")
         )
         self.window_prefix_hotkey_edit = QLineEdit(
-            str(self.config.get("window_management", {}).get("hotkey_prefix", ""))
+            self._config_text("window_management", "hotkey_prefix", "<ctrl>+<cmd>")
         )
-        for edit in (
-            self.ptt_hotkey_edit,
-            self.ptt_secondary_hotkey_edit,
-            self.command_hotkey_edit,
-            self.window_prefix_hotkey_edit,
-        ):
-            edit.setPlaceholderText("<cmd>+<option>")
+        hotkey_placeholders = {
+            self.ptt_hotkey_edit: "<cmd>+<option>",
+            self.ptt_secondary_hotkey_edit: "<fn>",
+            self.command_hotkey_edit: "<ctrl>+<cmd>",
+            self.window_prefix_hotkey_edit: "<ctrl>+<cmd>",
+        }
+        for edit, placeholder in hotkey_placeholders.items():
+            edit.setPlaceholderText(placeholder)
+            edit.setMinimumWidth(260)
         hotkey_layout.addRow("Primary PTT:", self.ptt_hotkey_edit)
         hotkey_layout.addRow("Secondary PTT:", self.ptt_secondary_hotkey_edit)
         hotkey_layout.addRow("Command PTT:", self.command_hotkey_edit)
@@ -899,8 +912,8 @@ class BloviateUI(QMainWindow):
         mode_layout = QHBoxLayout()
         mode_layout.addWidget(QLabel("Mode:"))
         self.voice_mode_combo = QComboBox()
-        self.voice_mode_combo.addItem("Whisper (Verify Speaker)", "whisper")
-        self.voice_mode_combo.addItem("Talk (Bypass Verification)", "talk")
+        self.voice_mode_combo.addItem("Verified voice", "whisper")
+        self.voice_mode_combo.addItem("Open talk", "talk")
         self.apply_voice_mode_button = QPushButton("Apply Mode")
         mode_layout.addWidget(self.voice_mode_combo, 1)
         mode_layout.addWidget(self.apply_voice_mode_button)
@@ -987,7 +1000,7 @@ class BloviateUI(QMainWindow):
         self.apply_dictation_button.clicked.connect(self._apply_dictation_settings)
 
         # Models and providers
-        model_group = QGroupBox("Models & Providers")
+        model_group = QGroupBox("Models && Providers")
         model_layout = QFormLayout(model_group)
         self.provider_combo = QComboBox()
         for provider in self._model_options().get("providers", []):
@@ -1012,10 +1025,16 @@ class BloviateUI(QMainWindow):
         self.provider_priority_edit = QLineEdit(str(priority))
         self.openai_key_edit = QLineEdit()
         self.openai_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.openai_key_edit.setPlaceholderText("Paste to save in Keychain")
+        self.openai_key_edit.setPlaceholderText("Paste to replace")
+        self.openai_key_source_label = QLabel("")
+        self.openai_key_source_label.setStyleSheet(self._settings_status_default_style)
         self.deepgram_key_edit = QLineEdit()
         self.deepgram_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.deepgram_key_edit.setPlaceholderText("Paste to save in Keychain")
+        self.deepgram_key_edit.setPlaceholderText("Paste to replace")
+        self.deepgram_key_source_label = QLabel("")
+        self.deepgram_key_source_label.setStyleSheet(self._settings_status_default_style)
+        openai_key_widget = self._key_field_widget(self.openai_key_edit, self.openai_key_source_label)
+        deepgram_key_widget = self._key_field_widget(self.deepgram_key_edit, self.deepgram_key_source_label)
         model_layout.addRow("Primary provider:", self.provider_combo)
         model_layout.addRow("Whisper model:", self.whisper_model_combo)
         model_layout.addRow("Whisper fallback:", self.whisper_fallback_combo)
@@ -1023,8 +1042,8 @@ class BloviateUI(QMainWindow):
         model_layout.addRow("Deepgram final:", self.deepgram_prerecorded_model_combo)
         model_layout.addRow("OpenAI STT:", self.openai_model_combo)
         model_layout.addRow("Final priority:", self.provider_priority_edit)
-        model_layout.addRow("OpenAI key:", self.openai_key_edit)
-        model_layout.addRow("Deepgram key:", self.deepgram_key_edit)
+        model_layout.addRow("OpenAI key:", openai_key_widget)
+        model_layout.addRow("Deepgram key:", deepgram_key_widget)
         model_actions = QHBoxLayout()
         self.apply_models_button = QPushButton("Apply Models")
         self.save_api_keys_button = QPushButton("Save API Keys")
@@ -1041,12 +1060,18 @@ class BloviateUI(QMainWindow):
         self._refresh_secret_status()
 
         # Post-processing
-        cleanup_group = QGroupBox("Cleanup")
+        cleanup_group = QGroupBox("Output Cleanup")
         cleanup_layout = QFormLayout(cleanup_group)
         pp_cfg = self.config.get("post_processing", {})
         self.post_processing_mode_combo = QComboBox()
+        cleanup_labels = {
+            "verbatim": "Verbatim",
+            "clean": "Clean prose",
+            "coding": "Coding",
+            "message": "Message",
+        }
         for value in self._model_options().get("post_processing_modes", ["verbatim", "clean", "coding", "message"]):
-            self.post_processing_mode_combo.addItem(value.title(), value)
+            self.post_processing_mode_combo.addItem(cleanup_labels.get(value, value.title()), value)
         self._set_combo_data(self.post_processing_mode_combo, pp_cfg.get("mode", "verbatim"))
         self.openai_cleanup_checkbox = QCheckBox("Use OpenAI cleanup when available")
         self.openai_cleanup_checkbox.setChecked(bool(pp_cfg.get("openai_enabled", False)))
@@ -1070,6 +1095,7 @@ class BloviateUI(QMainWindow):
         # Dictionary settings
         dictionary_group = QGroupBox("Dictionary")
         dictionary_layout = QVBoxLayout(dictionary_group)
+        dictionary_layout.setSpacing(12)
         self.dictionary_path_label = QLabel("")
         self.dictionary_path_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
@@ -1089,34 +1115,65 @@ class BloviateUI(QMainWindow):
         self.dictionary_status_label = QLabel("")
         self.dictionary_status_label.setStyleSheet(self._settings_status_default_style)
         dictionary_layout.addWidget(self.dictionary_status_label)
-        dictionary_edit_layout = QHBoxLayout()
-        dictionary_terms_layout = QVBoxLayout()
-        dictionary_terms_layout.addWidget(QLabel("Preferred terms"))
-        self.dictionary_terms_edit = QTextEdit()
-        self.dictionary_terms_edit.setMinimumHeight(120)
-        dictionary_terms_layout.addWidget(self.dictionary_terms_edit)
-        dictionary_rules_layout = QVBoxLayout()
-        dictionary_rules_layout.addWidget(QLabel("Corrections YAML"))
-        self.dictionary_corrections_edit = QTextEdit()
-        self.dictionary_corrections_edit.setMinimumHeight(120)
-        dictionary_rules_layout.addWidget(self.dictionary_corrections_edit)
-        dictionary_edit_layout.addLayout(dictionary_terms_layout)
-        dictionary_edit_layout.addLayout(dictionary_rules_layout)
-        dictionary_layout.addLayout(dictionary_edit_layout)
-        dictionary_save_actions = QHBoxLayout()
-        self.load_dictionary_button = QPushButton("Load Into Editor")
-        self.save_dictionary_button = QPushButton("Save Dictionary")
-        dictionary_save_actions.addWidget(self.load_dictionary_button)
-        dictionary_save_actions.addWidget(self.save_dictionary_button)
-        dictionary_save_actions.addStretch()
-        dictionary_layout.addLayout(dictionary_save_actions)
+
+        preferred_layout = QVBoxLayout()
+        preferred_layout.addWidget(QLabel("Preferred words and phrases"))
+        add_term_layout = QHBoxLayout()
+        self.dictionary_term_edit = QLineEdit()
+        self.dictionary_term_edit.setPlaceholderText("Bloviate, kubectl, Callum Reid")
+        self.add_dictionary_term_button = QPushButton("Add Word")
+        add_term_layout.addWidget(self.dictionary_term_edit, 1)
+        add_term_layout.addWidget(self.add_dictionary_term_button)
+        preferred_layout.addLayout(add_term_layout)
+        self.dictionary_terms_table = QTableWidget(0, 2)
+        self.dictionary_terms_table.setHorizontalHeaderLabels(["Word or phrase", ""])
+        self.dictionary_terms_table.verticalHeader().setVisible(False)
+        self.dictionary_terms_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.dictionary_terms_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.dictionary_terms_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.dictionary_terms_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.dictionary_terms_table.setMinimumHeight(120)
+        preferred_layout.addWidget(self.dictionary_terms_table)
+        dictionary_layout.addLayout(preferred_layout)
+
+        correction_layout = QVBoxLayout()
+        correction_layout.addWidget(QLabel("Replacement rules"))
+        add_correction_layout = QHBoxLayout()
+        self.dictionary_wrong_edit = QLineEdit()
+        self.dictionary_wrong_edit.setPlaceholderText("what gets transcribed")
+        self.dictionary_right_edit = QLineEdit()
+        self.dictionary_right_edit.setPlaceholderText("what it should say")
+        self.dictionary_match_combo = QComboBox()
+        self.dictionary_match_combo.addItem("Contains", "substring")
+        self.dictionary_match_combo.addItem("Whole word", "whole_word")
+        self.add_dictionary_correction_button = QPushButton("Add Replacement")
+        add_correction_layout.addWidget(self.dictionary_wrong_edit, 1)
+        add_correction_layout.addWidget(QLabel("->"))
+        add_correction_layout.addWidget(self.dictionary_right_edit, 1)
+        add_correction_layout.addWidget(self.dictionary_match_combo)
+        add_correction_layout.addWidget(self.add_dictionary_correction_button)
+        correction_layout.addLayout(add_correction_layout)
+        self.dictionary_corrections_table = QTableWidget(0, 4)
+        self.dictionary_corrections_table.setHorizontalHeaderLabels(["Replace", "With", "Match", ""])
+        self.dictionary_corrections_table.verticalHeader().setVisible(False)
+        self.dictionary_corrections_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.dictionary_corrections_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.dictionary_corrections_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.dictionary_corrections_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.dictionary_corrections_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.dictionary_corrections_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.dictionary_corrections_table.setMinimumHeight(150)
+        correction_layout.addWidget(self.dictionary_corrections_table)
+        dictionary_layout.addLayout(correction_layout)
         layout.addWidget(dictionary_group)
 
         self.open_dictionary_button.clicked.connect(self._open_dictionary)
         self.reload_dictionary_button.clicked.connect(self._reload_dictionary)
         self.initialize_dictionary_button.clicked.connect(self._initialize_dictionary)
-        self.load_dictionary_button.clicked.connect(self._load_dictionary_editor)
-        self.save_dictionary_button.clicked.connect(self._save_dictionary_editor)
+        self.add_dictionary_term_button.clicked.connect(self._add_dictionary_term)
+        self.dictionary_term_edit.returnPressed.connect(self._add_dictionary_term)
+        self.add_dictionary_correction_button.clicked.connect(self._add_dictionary_correction)
+        self.dictionary_right_edit.returnPressed.connect(self._add_dictionary_correction)
         self._load_dictionary_editor()
 
         # History
@@ -1157,6 +1214,7 @@ class BloviateUI(QMainWindow):
         layout.addWidget(history_group)
         self.refresh_history_button.clicked.connect(self._refresh_history)
         self.history_search_edit.returnPressed.connect(self._refresh_history)
+        self.history_search_edit.textChanged.connect(self._refresh_history)
         self.copy_history_button.clicked.connect(self._copy_history_selection)
         self.delete_history_button.clicked.connect(self._delete_history_selection)
         self.clear_history_button.clicked.connect(self._clear_history)
@@ -1296,6 +1354,20 @@ class BloviateUI(QMainWindow):
         if index >= 0:
             combo.setCurrentIndex(index)
 
+    def _config_text(self, section: str, key: str, default: str = "") -> str:
+        value = self.config.get(section, {}).get(key)
+        text = str(value or "").strip()
+        return text or default
+
+    def _key_field_widget(self, line_edit: QLineEdit, status_label: QLabel) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(line_edit)
+        layout.addWidget(status_label)
+        return widget
+
     def _model_combo(self, option_key: str, current_value: str) -> QComboBox:
         combo = QComboBox()
         current = str(current_value or "").strip()
@@ -1430,7 +1502,24 @@ class BloviateUI(QMainWindow):
             status = statuses.get(provider, {})
             source = status.get("source", "missing")
             env_name = status.get("env_name", "")
-            parts.append(f"{provider.title()}: {source} ({env_name})")
+            redacted = status.get("redacted_value", "")
+            label = getattr(self, f"{provider}_key_source_label", None)
+            edit = getattr(self, f"{provider}_key_edit", None)
+            if source == "missing":
+                parts.append(f"{provider.title()}: missing")
+                if edit:
+                    edit.setPlaceholderText(f"Paste {provider.title()} key to save in Keychain")
+                if label:
+                    label.setText(f"No key found. Environment: {env_name}")
+                    label.setStyleSheet(self._settings_error_style)
+            else:
+                source_text = f"{source}: {redacted}" if redacted else source
+                parts.append(f"{provider.title()}: {source_text}")
+                if edit:
+                    edit.setPlaceholderText(f"{redacted} via {source} - paste to replace")
+                if label:
+                    label.setText(f"Configured via {source}" + (f" ({env_name})" if env_name else ""))
+                    label.setStyleSheet(self._settings_ok_style)
         self.model_status_label.setText(" • ".join(parts))
         self.model_status_label.setStyleSheet(self._settings_status_default_style)
 
@@ -1585,6 +1674,8 @@ class BloviateUI(QMainWindow):
         ok, message = self.ensure_personal_dictionary_exists()
         self._set_settings_status(self.dictionary_status_label, message, ok=ok)
         self._refresh_dictionary_path()
+        if ok:
+            self._load_dictionary_editor()
 
     def _open_dictionary(self):
         if not self.open_personal_dictionary:
@@ -1605,21 +1696,30 @@ class BloviateUI(QMainWindow):
         ok, message = self.reload_personal_dictionary()
         self._set_settings_status(self.dictionary_status_label, message, ok=ok)
         self._refresh_voice_controls()
+        if ok:
+            self._load_dictionary_editor()
 
     def _load_dictionary_editor(self):
-        if not hasattr(self, "dictionary_terms_edit"):
+        if not hasattr(self, "dictionary_terms_table"):
             return
         if not self.get_personal_dictionary_payload:
-            self.dictionary_terms_edit.setPlainText("")
-            self.dictionary_corrections_edit.setPlainText("")
+            self._dictionary_terms = []
+            self._dictionary_corrections = []
+            self._populate_dictionary_tables()
             return
         try:
             payload = self.get_personal_dictionary_payload() or {}
-            terms = payload.get("preferred_terms", [])
-            corrections = payload.get("corrections", [])
-            self.dictionary_terms_edit.setPlainText("\n".join(str(term) for term in terms))
-            self.dictionary_corrections_edit.setPlainText(
-                yaml.safe_dump(corrections, sort_keys=False, allow_unicode=False)
+            self._dictionary_terms = [str(term) for term in payload.get("preferred_terms", []) if str(term).strip()]
+            self._dictionary_corrections = [
+                dict(correction)
+                for correction in payload.get("corrections", [])
+                if isinstance(correction, dict)
+            ]
+            self._populate_dictionary_tables()
+            self._set_settings_status(
+                self.dictionary_status_label,
+                f"Loaded {len(self._dictionary_terms)} term(s), {len(self._dictionary_corrections)} replacement(s).",
+                ok=True,
             )
         except Exception as exc:
             self._set_settings_status(self.dictionary_status_label, f"Could not load dictionary: {exc}", ok=False)
@@ -1628,27 +1728,94 @@ class BloviateUI(QMainWindow):
         if not self.save_personal_dictionary_payload:
             self._set_settings_status(self.dictionary_status_label, "Dictionary save unavailable.", ok=False)
             return
-        terms = [
-            line.strip()
-            for line in self.dictionary_terms_edit.toPlainText().splitlines()
-            if line.strip()
-        ]
-        try:
-            raw = yaml.safe_load(self.dictionary_corrections_edit.toPlainText() or "[]")
-            if isinstance(raw, dict):
-                corrections = raw.get("corrections", [])
-            else:
-                corrections = raw or []
-            if not isinstance(corrections, list):
-                raise ValueError("corrections must be a YAML list")
-        except Exception as exc:
-            self._set_settings_status(self.dictionary_status_label, f"Invalid corrections YAML: {exc}", ok=False)
-            return
 
-        ok, message = self.save_personal_dictionary_payload(terms, corrections)
+        ok, message = self.save_personal_dictionary_payload(
+            self._dictionary_terms,
+            self._dictionary_corrections,
+        )
         self._set_settings_status(self.dictionary_status_label, message, ok=ok)
         if ok:
             self._load_dictionary_editor()
+
+    def _populate_dictionary_tables(self):
+        self.dictionary_terms_table.setRowCount(len(self._dictionary_terms))
+        for row_idx, term in enumerate(self._dictionary_terms):
+            self.dictionary_terms_table.setItem(row_idx, 0, QTableWidgetItem(str(term)))
+            delete_button = QPushButton("Delete")
+            delete_button.clicked.connect(lambda _checked=False, row=row_idx: self._delete_dictionary_term(row))
+            self.dictionary_terms_table.setCellWidget(row_idx, 1, delete_button)
+
+        self.dictionary_corrections_table.setRowCount(len(self._dictionary_corrections))
+        for row_idx, correction in enumerate(self._dictionary_corrections):
+            variations = correction.get("variations", []) or []
+            if not isinstance(variations, list):
+                variations = [variations]
+            replace_text = "; ".join(str(item) for item in variations)
+            with_text = str(correction.get("phrase", ""))
+            match = str(correction.get("match", "substring") or "substring")
+            match_label = "Whole word" if match == "whole_word" else "Contains"
+            values = [replace_text, with_text, match_label]
+            for col_idx, value in enumerate(values):
+                self.dictionary_corrections_table.setItem(row_idx, col_idx, QTableWidgetItem(value))
+            delete_button = QPushButton("Delete")
+            delete_button.clicked.connect(lambda _checked=False, row=row_idx: self._delete_dictionary_correction(row))
+            self.dictionary_corrections_table.setCellWidget(row_idx, 3, delete_button)
+
+    def _add_dictionary_term(self):
+        term = " ".join(self.dictionary_term_edit.text().strip().split())
+        if not term:
+            self._set_settings_status(self.dictionary_status_label, "Enter a word or phrase first.", ok=False)
+            return
+        seen = {existing.lower() for existing in self._dictionary_terms}
+        if term.lower() not in seen:
+            self._dictionary_terms.append(term)
+        self.dictionary_term_edit.clear()
+        self._save_dictionary_editor()
+
+    def _delete_dictionary_term(self, row_idx: int):
+        if 0 <= row_idx < len(self._dictionary_terms):
+            self._dictionary_terms.pop(row_idx)
+            self._save_dictionary_editor()
+
+    def _add_dictionary_correction(self):
+        wrong = " ".join(self.dictionary_wrong_edit.text().strip().split())
+        right = " ".join(self.dictionary_right_edit.text().strip().split())
+        if not wrong or not right:
+            self._set_settings_status(
+                self.dictionary_status_label,
+                "Enter both the misheard text and the replacement.",
+                ok=False,
+            )
+            return
+        correction = {
+            "phrase": right,
+            "variations": [wrong],
+            "match": str(self.dictionary_match_combo.currentData() or "substring"),
+        }
+        key = (
+            correction["phrase"].lower(),
+            tuple(item.lower() for item in correction["variations"]),
+            correction["match"],
+        )
+        existing = {
+            (
+                str(item.get("phrase", "")).lower(),
+                tuple(str(variation).lower() for variation in item.get("variations", []) or []),
+                str(item.get("match", "substring") or "substring"),
+            )
+            for item in self._dictionary_corrections
+            if isinstance(item, dict)
+        }
+        if key not in existing:
+            self._dictionary_corrections.append(correction)
+        self.dictionary_wrong_edit.clear()
+        self.dictionary_right_edit.clear()
+        self._save_dictionary_editor()
+
+    def _delete_dictionary_correction(self, row_idx: int):
+        if 0 <= row_idx < len(self._dictionary_corrections):
+            self._dictionary_corrections.pop(row_idx)
+            self._save_dictionary_editor()
 
     def _refresh_history(self):
         if not hasattr(self, "history_table"):
@@ -1659,7 +1826,8 @@ class BloviateUI(QMainWindow):
             return
         query = self.history_search_edit.text().strip()
         try:
-            records = self.get_history_records(query, 100) or []
+            max_records = int(self.config.get("history", {}).get("max_ui_records", 100))
+            records = self.get_history_records(query, max_records) or []
         except Exception as exc:
             self._set_settings_status(self.history_status_label, f"Could not load history: {exc}", ok=False)
             return
@@ -1685,7 +1853,14 @@ class BloviateUI(QMainWindow):
                         else str(record.get("text", ""))
                     )
                 self.history_table.setItem(row_idx, col_idx, item)
-        self._set_settings_status(self.history_status_label, f"Loaded {len(records)} history item(s).", ok=True)
+        if records:
+            self._set_settings_status(self.history_status_label, f"Loaded {len(records)} history item(s).", ok=True)
+        else:
+            self._set_settings_status(
+                self.history_status_label,
+                "No saved transcripts yet. New dictations are recorded automatically.",
+                ok=True,
+            )
 
     def _selected_history_id(self):
         rows = self.history_table.selectionModel().selectedRows() if self.history_table.selectionModel() else []
@@ -1761,9 +1936,9 @@ class BloviateUI(QMainWindow):
         ok, text = self.run_doctor_text()
         self.doctor_output.setPlainText(text)
         if ok:
-            self.doctor_output.setStyleSheet("color: #DADADA;")
+            self.doctor_output.setStyleSheet("color: #26211D;")
         else:
-            self.doctor_output.setStyleSheet("color: #FFCDD2;")
+            self.doctor_output.setStyleSheet("color: #B23B35;")
 
     def _reset_defaults(self):
         if not self.reset_settings_to_defaults:
@@ -1780,7 +1955,7 @@ class BloviateUI(QMainWindow):
             return
         ok, message = self.reset_settings_to_defaults()
         self.doctor_output.setPlainText(message)
-        self.doctor_output.setStyleSheet("color: #DADADA;" if ok else "color: #FFCDD2;")
+        self.doctor_output.setStyleSheet("color: #26211D;" if ok else "color: #B23B35;")
 
     def _toggle_show_window_on_startup(self, state: int):
         enabled = state == Qt.CheckState.Checked.value
@@ -1830,11 +2005,200 @@ class BloviateUI(QMainWindow):
             self.tabs.setCurrentWidget(self.settings_tab)
         self._refresh_voice_controls()
         self._refresh_dictionary_path()
+        self._load_dictionary_editor()
+        self._refresh_history()
 
     def request_quit(self):
         """Mark the window as closing and quit the app."""
         self._closing = True
         QApplication.instance().quit()
+
+    def _status_pill_style(self, background: str, color: str) -> str:
+        return (
+            "font-size: 15px; font-weight: 700; padding: 10px 14px; "
+            f"background-color: {background}; color: {color}; "
+            "border: 1px solid #D8CCBA; border-radius: 8px;"
+        )
+
+    def set_light_theme(self):
+        """Apply the polished default light theme."""
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#F7F3EA"))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#26211D"))
+        palette.setColor(QPalette.ColorRole.Base, QColor("#FFFDF7"))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#F1E9DB"))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#26211D"))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#FFFDF7"))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#26211D"))
+        palette.setColor(QPalette.ColorRole.Button, QColor("#FFFDF7"))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#26211D"))
+        palette.setColor(QPalette.ColorRole.BrightText, QColor("#B23B35"))
+        palette.setColor(QPalette.ColorRole.Link, QColor("#2D6B6B"))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor("#2D6B6B"))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#FFFFFF"))
+        self.setPalette(palette)
+        QApplication.instance().setPalette(palette)
+        self.setStyleSheet(
+            """
+            QMainWindow, QWidget#AppRoot, QWidget#SettingsContent, QTabWidget::pane {
+                background: #F7F3EA;
+                color: #26211D;
+            }
+            QTabWidget::pane {
+                border: 0;
+                top: -1px;
+            }
+            QTabBar {
+                background: #F7F3EA;
+            }
+            QTabBar::tab {
+                background: #E8DFD0;
+                color: #37312B;
+                min-width: 108px;
+                padding: 8px 18px;
+                border: 1px solid #D8CCBA;
+                border-bottom: 0;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin-top: 10px;
+            }
+            QTabBar::tab:selected {
+                background: #2D6B6B;
+                color: white;
+                border-color: #2D6B6B;
+            }
+            QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
+                background: #F7F3EA;
+                border: 0;
+            }
+            QGroupBox {
+                background: #FFFDF7;
+                border: 1px solid #DDD2C1;
+                border-radius: 8px;
+                margin-top: 22px;
+                padding: 18px 18px 16px 18px;
+                font-weight: 700;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 12px;
+                padding: 0 6px;
+                color: #26211D;
+                background: #F7F3EA;
+            }
+            QLabel {
+                color: #26211D;
+            }
+            QLineEdit, QTextEdit, QComboBox, QTableWidget {
+                background: #FFFFFF;
+                color: #26211D;
+                border: 1px solid #CFC3B2;
+                border-radius: 6px;
+                padding: 7px 9px;
+                selection-background-color: #2D6B6B;
+                selection-color: #FFFFFF;
+            }
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
+                border: 1px solid #2D6B6B;
+            }
+            QLineEdit::placeholder {
+                color: #8E8376;
+            }
+            QComboBox::drop-down {
+                border: 0;
+                width: 26px;
+            }
+            QPushButton {
+                background-color: #FFFDF7;
+                color: #26211D;
+                border: 1px solid #2E332F;
+                border-radius: 6px;
+                padding: 7px 14px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #F1E9DB;
+            }
+            QPushButton:pressed {
+                background-color: #E8DFD0;
+            }
+            QPushButton:disabled {
+                background-color: #E3DBCE;
+                color: #6F665E;
+                border-color: #D8D0C2;
+            }
+            QCheckBox {
+                color: #26211D;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 5px;
+                border: 1px solid #BFB2A1;
+                background: #FFFFFF;
+            }
+            QCheckBox::indicator:checked {
+                background: #2D6B6B;
+                border-color: #2D6B6B;
+            }
+            QTableWidget {
+                gridline-color: #E5DBC9;
+                alternate-background-color: #F7F1E7;
+            }
+            QHeaderView::section {
+                background: #E9E1D3;
+                color: #26211D;
+                border: 0;
+                border-right: 1px solid #D8CCBA;
+                padding: 7px 9px;
+                font-weight: 700;
+            }
+            QProgressBar {
+                background: #FFFFFF;
+                border: 1px solid #CFC3B2;
+                border-radius: 6px;
+                color: #26211D;
+                text-align: center;
+                min-height: 24px;
+            }
+            QProgressBar::chunk {
+                background-color: #2D6B6B;
+                border-radius: 5px;
+            }
+            QSlider::groove:horizontal {
+                background: #E2D7C6;
+                height: 7px;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #FFFFFF;
+                border: 1px solid #BFB2A1;
+                width: 20px;
+                margin: -7px 0;
+                border-radius: 10px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #2D6B6B;
+                border-radius: 3px;
+            }
+            QScrollBar:vertical {
+                background: #F1E9DB;
+                width: 12px;
+                margin: 0;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #BFB2A1;
+                min-height: 36px;
+                border-radius: 6px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0;
+            }
+            """
+        )
 
     def set_dark_theme(self):
         """Apply dark theme to the application."""
@@ -1870,20 +2234,24 @@ class BloviateUI(QMainWindow):
 
         # Color based on level
         if percentage > 60:
-            color = "#4CAF50"  # Green
+            color = "#2F7D4F"
         elif percentage > 20:
-            color = "#FFC107"  # Yellow
+            color = "#C58C2A"
         else:
-            color = "#9E9E9E"  # Gray
+            color = "#BFB2A1"
 
         self.audio_bar.setStyleSheet(f"""
             QProgressBar {{
-                border: 1px solid gray;
-                border-radius: 3px;
+                background: #FFFFFF;
+                border: 1px solid #CFC3B2;
+                border-radius: 6px;
+                color: #26211D;
                 text-align: center;
+                min-height: 24px;
             }}
             QProgressBar::chunk {{
                 background-color: {color};
+                border-radius: 5px;
             }}
         """)
 
@@ -1891,10 +2259,7 @@ class BloviateUI(QMainWindow):
         """Update PTT status indicator."""
         if is_active:
             self.ptt_label.setText("PTT: ACTIVE")
-            self.ptt_label.setStyleSheet(
-                "font-size: 16px; font-weight: bold; padding: 10px; "
-                "background-color: #4CAF50; color: white; border-radius: 5px;"
-            )
+            self.ptt_label.setStyleSheet(self._status_pill_style("#2F7D4F", "#FFFFFF"))
             # Update menu bar indicator
             if self.menu_bar_indicator:
                 self.menu_bar_indicator.set_recording()
@@ -1902,30 +2267,16 @@ class BloviateUI(QMainWindow):
                 self.ptt_overlay.set_recording()
         else:
             self.ptt_label.setText("PTT: Inactive")
-            self.ptt_label.setStyleSheet(
-                "font-size: 16px; font-weight: bold; padding: 10px;"
-            )
+            self.ptt_label.setStyleSheet(self._status_pill_style("#E9E1D3", "#24201C"))
 
     def _update_command_status(self, message: str, state: str):
         """Update command mode indicator."""
         styles = {
-            "inactive": "font-size: 14px; font-weight: bold; padding: 6px;",
-            "listening": (
-                "font-size: 14px; font-weight: bold; padding: 6px; "
-                "background-color: #2196F3; color: white; border-radius: 5px;"
-            ),
-            "processing": (
-                "font-size: 14px; font-weight: bold; padding: 6px; "
-                "background-color: #FFC107; color: black; border-radius: 5px;"
-            ),
-            "recognized": (
-                "font-size: 14px; font-weight: bold; padding: 6px; "
-                "background-color: #4CAF50; color: white; border-radius: 5px;"
-            ),
-            "unrecognized": (
-                "font-size: 14px; font-weight: bold; padding: 6px; "
-                "background-color: #F44336; color: white; border-radius: 5px;"
-            ),
+            "inactive": self._status_pill_style("#E9E1D3", "#24201C"),
+            "listening": self._status_pill_style("#2D6B6B", "#FFFFFF"),
+            "processing": self._status_pill_style("#E7C873", "#24201C"),
+            "recognized": self._status_pill_style("#2F7D4F", "#FFFFFF"),
+            "unrecognized": self._status_pill_style("#B23B35", "#FFFFFF"),
         }
 
         self.command_label.setText(message)
@@ -1959,20 +2310,20 @@ class BloviateUI(QMainWindow):
         """Update voice match status."""
         if score < 0:
             self.match_status_label.setText("Talk mode")
-            self.match_status_label.setStyleSheet("color: #9E9E9E; font-weight: bold;")
+            self.match_status_label.setStyleSheet("color: #6F665E; font-weight: bold;")
             self.match_score_label.setText("")
             return
 
         if is_match:
-            self.match_status_label.setText("✓ Matched")
-            self.match_status_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            self.match_status_label.setText("Matched")
+            self.match_status_label.setStyleSheet("color: #2F7D4F; font-weight: bold;")
             if self.menu_bar_indicator:
                 self.menu_bar_indicator.set_accepted()
             if self.ptt_overlay:
                 self.ptt_overlay.set_accepted()
         else:
-            self.match_status_label.setText("✗ Rejected")
-            self.match_status_label.setStyleSheet("color: #F44336; font-weight: bold;")
+            self.match_status_label.setText("Rejected")
+            self.match_status_label.setStyleSheet("color: #B23B35; font-weight: bold;")
             # Update menu bar indicator
             if self.menu_bar_indicator:
                 self.menu_bar_indicator.set_rejected()
@@ -2010,6 +2361,8 @@ class BloviateUI(QMainWindow):
         self.transcription_label.setText(f"Last: {text}")
         self.transcription_label.setStyleSheet(self._transcription_style_final)
         self._last_final_text = text
+        if hasattr(self, "history_table"):
+            QTimer.singleShot(0, self._refresh_history)
         # Show success in menu bar
         if self.menu_bar_indicator:
             self.menu_bar_indicator.set_accepted()
