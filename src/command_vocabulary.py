@@ -80,9 +80,13 @@ def get_command_prompt_phrases() -> List[str]:
     for _, suffixes in WINDOW_PREFIX_SUFFIXES:
         for suffix in suffixes:
             add_phrase(f"window {suffix}")
+            add_phrase(f"screen {suffix}")
+            add_phrase(f"run command {suffix}")
+            add_phrase(f"run command screen {suffix}")
 
     for _, suffixes in DESKTOP_PREFIX_SUFFIXES:
         for suffix in suffixes:
             add_phrase(f"desktop {suffix}")
+            add_phrase(f"run command desktop {suffix}")
 
     return phrases

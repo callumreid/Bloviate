@@ -134,7 +134,7 @@ def _migrate_config(data: dict) -> dict:
         config_version = int(app_config.get("config_version", 0) or 0)
     except (TypeError, ValueError):
         config_version = 0
-    is_legacy_config = config_version < 4
+    is_legacy_config = config_version < 5
 
     ui_config = _config_section(data, "ui")
     if str(ui_config.get("theme", "")).strip().lower() == "dark":
@@ -159,11 +159,18 @@ def _migrate_config(data: dict) -> dict:
         ptt_config["hotkey"] = "<cmd>+<option>"
     if not str(ptt_config.get("secondary_hotkey", "") or "").strip():
         ptt_config["secondary_hotkey"] = "<fn>"
+    if not str(ptt_config.get("toggle_hotkey", "") or "").strip():
+        ptt_config["toggle_hotkey"] = "<cmd>+<option>+<shift>"
     window_config = _config_section(data, "window_management")
+    if is_legacy_config:
+        window_config["enabled"] = True
     if not str(window_config.get("hotkey_prefix", "") or "").strip():
         window_config["hotkey_prefix"] = "<ctrl>+<cmd>"
     if not str(window_config.get("command_hotkey", "") or "").strip():
         window_config["command_hotkey"] = "<ctrl>+<cmd>"
+    prefixes = window_config.get("voice_command_prefixes")
+    if not isinstance(prefixes, list) or not [p for p in prefixes if str(p).strip()]:
+        window_config["voice_command_prefixes"] = ["run command", "screen", "window", "desktop"]
     history_config = _config_section(data, "history")
     history_config["enabled"] = bool(history_config.get("enabled", True))
     transcription_config = _config_section(data, "transcription")
@@ -176,7 +183,7 @@ def _migrate_config(data: dict) -> dict:
         post_processing_config["openai_enabled"] = bool(
             post_processing_config.get("openai_enabled", True)
         )
-    app_config["config_version"] = 4
+    app_config["config_version"] = 5
     return data
 
 

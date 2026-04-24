@@ -6,6 +6,8 @@ Bloviate is a macOS-first voice dictation app for whispering in noisy spaces. It
 
 - Verifies your enrolled voice before transcribing in whisper mode
 - Supports talk mode when you want normal dictation without speaker verification
+- Supports hold-to-talk and toggle-to-talk; `Cmd+Option+Shift` toggles dictation by default
+- Runs window commands from phrases like `screen left half` or `run command desktop right`
 - Uses Deepgram for live interim text, OpenAI or Deepgram for final text, and local Whisper as fallback
 - Lets you configure audio input, hotkeys, models, providers, API keys, dictionary, cleanup, history, startup behavior, and diagnostics from Settings
 - Stores user config/state under `~/Library/Application Support/Bloviate`
@@ -46,6 +48,7 @@ Then open Settings from the window or menu bar icon and configure. After `blovia
 
 - microphone
 - push-to-talk hotkey
+- toggle dictation hotkey
 - OpenAI / Deepgram API keys
 - provider/model priority
 - dictionary terms and corrections
@@ -130,7 +133,7 @@ Transcript history is enabled by default and stored locally at:
 ~/Library/Application Support/Bloviate/history.sqlite
 ```
 
-History stores text metadata such as timestamp, mode, provider, target app/window, voice score, and output action. It does not store raw audio by default. You can search, copy, delete, clear, export, or disable history in Settings.
+History stores text metadata such as timestamp, mode, provider, target app/window, voice score, and output action. It does not store raw audio by default. Whisper-mode voice rejections are still transcribed into history when possible, but they are not auto-pasted. You can search, copy, delete, clear, export, or disable history in Settings.
 
 ## Permissions
 

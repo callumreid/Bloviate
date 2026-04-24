@@ -5,6 +5,7 @@ Manages global keyboard shortcuts for activating dictation.
 
 from pynput import keyboard
 from typing import Callable, Optional, Dict
+import threading
 
 
 class PTTHandler:
@@ -18,6 +19,8 @@ class PTTHandler:
 
         self.is_active = False
         self.listener: Optional[keyboard.Listener] = None
+        self._press_timer: Optional[threading.Timer] = None
+        self.press_delay_s = max(0.0, float(ptt_config.get("press_delay_ms", 90)) / 1000.0)
 
         # Callbacks for PTT hotkey
         self.on_press_callback: Optional[Callable] = None
@@ -140,13 +143,43 @@ class PTTHandler:
         """Check if any configured PTT hotkey is currently active."""
         return any(self._matches_hotkey(hotkey_set) for hotkey_set in self.hotkeys)
 
+    def _current_key_names(self) -> set:
+        return self._key_set(self.current_keys)
+
+    def _has_pending_consuming_extension(self) -> bool:
+        """Return True if current keys could still become a consuming hotkey."""
+        current_names = self._current_key_names()
+        if not current_names:
+            return False
+        for hotkey_info in self.additional_hotkeys.values():
+            if not hotkey_info.get("consume", False):
+                continue
+            target_names = self._key_set(hotkey_info["hotkey"])
+            if current_names < target_names:
+                return True
+        return False
+
+    def _cancel_pending_ptt(self):
+        timer = self._press_timer
+        self._press_timer = None
+        if timer:
+            timer.cancel()
+
+    def _activate_ptt_if_still_matching(self):
+        self._press_timer = None
+        if self.listener and self._matches_any_ptt_hotkey() and not self.is_active:
+            self.is_active = True
+            if self.on_press_callback:
+                self.on_press_callback()
+
     def add_hotkey(
         self,
         name: str,
         hotkey_str: str,
         on_press: Callable,
         on_release: Optional[Callable] = None,
-        match_exact: bool = False
+        match_exact: bool = False,
+        consume: bool = False
     ):
         """
         Add an additional hotkey.
@@ -168,7 +201,8 @@ class PTTHandler:
             'on_press': on_press,
             'on_release': on_release,
             'is_active': False,
-            'match_exact': match_exact
+            'match_exact': match_exact,
+            'consume': consume,
         }
         if self.verbose_logs:
             print(f"Added hotkey '{name}': {hotkey_str}")
@@ -177,13 +211,9 @@ class PTTHandler:
         """Handle key press events."""
         self.current_keys.add(key)
 
-        # Check main PTT hotkey
-        if self._matches_any_ptt_hotkey() and not self.is_active:
-            self.is_active = True
-            if self.on_press_callback:
-                self.on_press_callback()
-
-        # Check additional hotkeys
+        consumed = False
+        # Check additional hotkeys first so an exact toggle like
+        # Cmd+Option+Shift does not also activate the shorter Cmd+Option PTT.
         for name, hotkey_info in self.additional_hotkeys.items():
             if self._matches_hotkey(
                 hotkey_info['hotkey'],
@@ -193,6 +223,24 @@ class PTTHandler:
                 self.active_hotkeys.add(name)
                 if hotkey_info['on_press']:
                     hotkey_info['on_press']()
+                consumed = consumed or bool(hotkey_info.get('consume', False))
+
+        if consumed:
+            self._cancel_pending_ptt()
+            return
+
+        # Check main PTT hotkey
+        if self._matches_any_ptt_hotkey() and not self.is_active:
+            if self.press_delay_s > 0 and self._has_pending_consuming_extension():
+                if self._press_timer is None:
+                    self._press_timer = threading.Timer(
+                        self.press_delay_s,
+                        self._activate_ptt_if_still_matching,
+                    )
+                    self._press_timer.daemon = True
+                    self._press_timer.start()
+            else:
+                self._activate_ptt_if_still_matching()
 
     def _on_release(self, key):
         """Handle key release events."""
@@ -200,6 +248,9 @@ class PTTHandler:
             self.current_keys.remove(key)
         except KeyError:
             pass
+
+        if self._press_timer and not self._matches_any_ptt_hotkey():
+            self._cancel_pending_ptt()
 
         # Check if main PTT hotkey is no longer active
         if self.is_active and not self._matches_any_ptt_hotkey():
@@ -248,6 +299,7 @@ class PTTHandler:
         self.listener = None
 
         self.is_active = False
+        self._cancel_pending_ptt()
         self.current_keys.clear()
         self.active_hotkeys.clear()
         for hotkey_info in self.additional_hotkeys.values():

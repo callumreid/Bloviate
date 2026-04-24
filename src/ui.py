@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QPushButton, QFrame, QStackedWidget, QGroupBox,
     QSlider, QCheckBox, QMessageBox, QScrollArea, QLineEdit,
     QTextEdit, QFormLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QFileDialog
+    QHeaderView, QAbstractItemView, QFileDialog, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker
 from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter
@@ -23,6 +23,7 @@ class UISignals(QObject):
     update_ptt_status = pyqtSignal(bool)
     update_voice_match = pyqtSignal(bool, float)
     update_transcription = pyqtSignal(str)
+    update_rejected_transcription = pyqtSignal(str)
     update_interim_transcription = pyqtSignal(str)
     update_status = pyqtSignal(str)
     update_command_status = pyqtSignal(str, str)
@@ -636,6 +637,70 @@ class BottomOverlayIndicator(QWidget):
         painter.end()
 
 
+class AudioLevelMeter(QWidget):
+    """Smoothed equalizer-style audio meter for the status page."""
+
+    _BAR_COUNT = 14
+    _GAP = 5
+    _MARGIN = 8
+    _PROFILE = [0.25, 0.42, 0.66, 0.88, 0.58, 0.36, 0.74, 0.96, 0.72, 0.44, 0.62, 0.82, 0.48, 0.3]
+    _MIN_BAR_HEIGHT = 0.10
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._target_level = 0.0
+        self._display_level = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._animate)
+        self.setMinimumHeight(46)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_audio_level(self, level: float):
+        self._target_level = max(0.0, min(float(level or 0.0), 1.0))
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def _animate(self):
+        delta = self._target_level - self._display_level
+        if abs(delta) < 0.004:
+            self._display_level = self._target_level
+            if self._target_level <= 0.004:
+                self._timer.stop()
+        else:
+            self._display_level += delta * 0.18
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        painter.setBrush(QColor("#FFFDF7"))
+        painter.drawRoundedRect(0, 0, self.width(), self.height(), 8, 8)
+
+        level = max(0.0, min(self._display_level, 1.0))
+        usable_w = max(1, self.width() - self._MARGIN * 2)
+        usable_h = max(1, self.height() - self._MARGIN * 2)
+        bar_w = max(4, int((usable_w - self._GAP * (self._BAR_COUNT - 1)) / self._BAR_COUNT))
+        total_w = bar_w * self._BAR_COUNT + self._GAP * (self._BAR_COUNT - 1)
+        start_x = self._MARGIN + max(0, int((usable_w - total_w) / 2))
+
+        base_color = QColor("#2D6B6B")
+        quiet_color = QColor("#BFB2A1")
+        for idx, base in enumerate(self._PROFILE):
+            height_ratio = self._MIN_BAR_HEIGHT + (base - self._MIN_BAR_HEIGHT) * level
+            h = max(4, int(usable_h * height_ratio))
+            x = start_x + idx * (bar_w + self._GAP)
+            y = self._MARGIN + int((usable_h - h) / 2)
+            color = QColor(base_color if level > 0.04 else quiet_color)
+            color.setAlpha(110 + int(120 * min(1.0, level + base * 0.25)))
+            painter.setBrush(color)
+            painter.drawRoundedRect(x, y, bar_w, h, 3, 3)
+
+        painter.end()
+
+
 class BloviateUI(QMainWindow):
     """Minimal UI showing real-time feedback."""
 
@@ -725,6 +790,7 @@ class BloviateUI(QMainWindow):
         self.signals.update_ptt_status.connect(self._update_ptt_status)
         self.signals.update_voice_match.connect(self._update_voice_match)
         self.signals.update_transcription.connect(self._update_transcription)
+        self.signals.update_rejected_transcription.connect(self._update_rejected_transcription)
         self.signals.update_interim_transcription.connect(self._update_interim_transcription)
         self.signals.update_status.connect(self._update_status)
         self.signals.update_command_status.connect(self._update_command_status)
@@ -819,9 +885,7 @@ class BloviateUI(QMainWindow):
         # Audio Level
         level_layout = QHBoxLayout()
         level_label = QLabel("Audio Level:")
-        self.audio_bar = QProgressBar()
-        self.audio_bar.setMaximum(100)
-        self.audio_bar.setValue(0)
+        self.audio_bar = AudioLevelMeter()
         level_layout.addWidget(level_label)
         level_layout.addWidget(self.audio_bar)
         layout.addLayout(level_layout)
@@ -932,25 +996,39 @@ class BloviateUI(QMainWindow):
         hotkey_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.ptt_hotkey_edit = QLineEdit(self._config_text("ptt", "hotkey", "<cmd>+<option>"))
         self.ptt_secondary_hotkey_edit = QLineEdit(self._config_text("ptt", "secondary_hotkey", "<fn>"))
+        self.ptt_toggle_hotkey_edit = QLineEdit(
+            self._config_text("ptt", "toggle_hotkey", "<cmd>+<option>+<shift>")
+        )
         self.command_hotkey_edit = QLineEdit(
             self._config_text("window_management", "command_hotkey", "<ctrl>+<cmd>")
         )
         self.window_prefix_hotkey_edit = QLineEdit(
             self._config_text("window_management", "hotkey_prefix", "<ctrl>+<cmd>")
         )
+        voice_prefixes = self.config.get("window_management", {}).get(
+            "voice_command_prefixes",
+            ["run command", "screen", "window", "desktop"],
+        )
+        if isinstance(voice_prefixes, list):
+            voice_prefixes = ", ".join(str(prefix) for prefix in voice_prefixes)
+        self.voice_command_prefixes_edit = QLineEdit(str(voice_prefixes or "run command, screen, window, desktop"))
         hotkey_placeholders = {
             self.ptt_hotkey_edit: "<cmd>+<option>",
             self.ptt_secondary_hotkey_edit: "<fn>",
+            self.ptt_toggle_hotkey_edit: "<cmd>+<option>+<shift>",
             self.command_hotkey_edit: "<ctrl>+<cmd>",
             self.window_prefix_hotkey_edit: "<ctrl>+<cmd>",
+            self.voice_command_prefixes_edit: "run command, screen, window, desktop",
         }
         for edit, placeholder in hotkey_placeholders.items():
             edit.setPlaceholderText(placeholder)
             edit.setMinimumWidth(260)
         hotkey_layout.addRow("Primary PTT:", self.ptt_hotkey_edit)
         hotkey_layout.addRow("Secondary PTT:", self.ptt_secondary_hotkey_edit)
+        hotkey_layout.addRow("Toggle PTT:", self.ptt_toggle_hotkey_edit)
         hotkey_layout.addRow("Command PTT:", self.command_hotkey_edit)
         hotkey_layout.addRow("Window prefix:", self.window_prefix_hotkey_edit)
+        hotkey_layout.addRow("Voice prefixes:", self.voice_command_prefixes_edit)
         hotkey_actions = QHBoxLayout()
         self.apply_hotkeys_button = QPushButton("Apply Hotkeys")
         hotkey_actions.addWidget(self.apply_hotkeys_button)
@@ -1536,11 +1614,18 @@ class BloviateUI(QMainWindow):
         return combo
 
     def _apply_hotkey_settings(self):
+        voice_prefixes = [
+            part.strip()
+            for part in self.voice_command_prefixes_edit.text().split(",")
+            if part.strip()
+        ]
         updates = {
             "ptt.hotkey": self.ptt_hotkey_edit.text().strip(),
             "ptt.secondary_hotkey": self.ptt_secondary_hotkey_edit.text().strip(),
+            "ptt.toggle_hotkey": self.ptt_toggle_hotkey_edit.text().strip(),
             "window_management.command_hotkey": self.command_hotkey_edit.text().strip(),
             "window_management.hotkey_prefix": self.window_prefix_hotkey_edit.text().strip(),
+            "window_management.voice_command_prefixes": voice_prefixes,
         }
         if not self.set_hotkey_settings:
             self._set_settings_status(self.hotkey_status_label, "Hotkey updates unavailable.", ok=False)
@@ -1549,11 +1634,15 @@ class BloviateUI(QMainWindow):
         if ok:
             self.config.setdefault("ptt", {})["hotkey"] = updates["ptt.hotkey"]
             self.config.setdefault("ptt", {})["secondary_hotkey"] = updates["ptt.secondary_hotkey"]
+            self.config.setdefault("ptt", {})["toggle_hotkey"] = updates["ptt.toggle_hotkey"]
             self.config.setdefault("window_management", {})["command_hotkey"] = updates[
                 "window_management.command_hotkey"
             ]
             self.config.setdefault("window_management", {})["hotkey_prefix"] = updates[
                 "window_management.hotkey_prefix"
+            ]
+            self.config.setdefault("window_management", {})["voice_command_prefixes"] = updates[
+                "window_management.voice_command_prefixes"
             ]
         self._set_settings_status(self.hotkey_status_label, message, ok=ok)
 
@@ -2387,39 +2476,15 @@ class BloviateUI(QMainWindow):
 
     def _update_audio_level(self, level: float):
         """Update the audio level bar."""
-        # Convert to percentage (assume max level is 0.3 for speaking)
-        percentage = min(int(level / 0.26 * 100), 100)
-        self.audio_bar.setValue(percentage)
+        normalized_level = max(0.0, min(level / 0.26, 1.0))
+        self.audio_bar.set_audio_level(normalized_level)
 
         # Update menu bar indicator
         if self.menu_bar_indicator:
-            self.menu_bar_indicator.set_audio_level(level / 0.26)
+            self.menu_bar_indicator.set_audio_level(normalized_level)
 
         if self.ptt_overlay:
-            self.ptt_overlay.set_audio_level(level / 0.26)
-
-        # Color based on level
-        if percentage > 60:
-            color = "#2F7D4F"
-        elif percentage > 20:
-            color = "#C58C2A"
-        else:
-            color = "#BFB2A1"
-
-        self.audio_bar.setStyleSheet(f"""
-            QProgressBar {{
-                background: #FFFFFF;
-                border: 1px solid #CFC3B2;
-                border-radius: 6px;
-                color: #26211D;
-                text-align: center;
-                min-height: 24px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {color};
-                border-radius: 5px;
-            }}
-        """)
+            self.ptt_overlay.set_audio_level(normalized_level)
 
     def _update_ptt_status(self, is_active: bool):
         """Update PTT status indicator."""
@@ -2534,6 +2599,21 @@ class BloviateUI(QMainWindow):
             self.menu_bar_indicator.set_accepted()
         if self.ptt_overlay:
             self.ptt_overlay.set_accepted()
+
+    def _update_rejected_transcription(self, text: str):
+        """Show a rejected transcript without marking the output as accepted."""
+        self.transcription_label.setText(f"Rejected (history only): {text}")
+        self.transcription_label.setStyleSheet(
+            "padding: 14px; background-color: #FFF9E9; color: #7A4D1C; "
+            "border: 1px solid #E3C88A; border-radius: 8px; min-height: 52px;"
+        )
+        self._last_final_text = f"Rejected (history only): {text}"
+        if hasattr(self, "history_table"):
+            QTimer.singleShot(0, self._refresh_history)
+        if self.menu_bar_indicator:
+            self.menu_bar_indicator.set_rejected()
+        if self.ptt_overlay:
+            self.ptt_overlay.set_rejected()
 
     def _update_interim_transcription(self, text: str):
         """Update interim transcription display while recording."""

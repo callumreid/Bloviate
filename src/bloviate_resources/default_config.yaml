@@ -2,7 +2,7 @@
 
 # App Presentation / Logging
 app:
-  config_version: 4
+  config_version: 5
   verbose_logs: false  # Developer mode: show full startup/runtime internals in terminal output
   suppress_third_party_warnings: true  # Hide noisy library warnings during normal startup
   startup_animation: false  # Show a short ASCII startup animation in interactive terminals
@@ -21,12 +21,18 @@ audio:
 ptt:
   hotkey: "<cmd>+<option>"
   secondary_hotkey: "<fn>"  # Optional secondary PTT hotkey
+  toggle_hotkey: "<cmd>+<option>+<shift>"  # Toggle dictation on/off without holding keys
 
 # Window Management Settings
 window_management:
-  enabled: false
+  enabled: true
   hotkey_prefix: "<ctrl>+<cmd>"  # Base hotkey, combine with arrow keys
   command_hotkey: "<ctrl>+<cmd>"  # Hold to speak window commands
+  voice_command_prefixes:
+    - "run command"
+    - "screen"
+    - "window"
+    - "desktop"
 
 # Voice Fingerprinting
 voice_fingerprint:

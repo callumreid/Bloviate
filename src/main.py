@@ -916,8 +916,10 @@ class Bloviate:
         old_config = {
             "hotkey": self.config.get("ptt", {}).get("hotkey"),
             "secondary_hotkey": self.config.get("ptt", {}).get("secondary_hotkey"),
+            "toggle_hotkey": self.config.get("ptt", {}).get("toggle_hotkey"),
             "command_hotkey": self.config.get("window_management", {}).get("command_hotkey"),
             "hotkey_prefix": self.config.get("window_management", {}).get("hotkey_prefix"),
+            "voice_command_prefixes": self.config.get("window_management", {}).get("voice_command_prefixes"),
         }
 
         try:
@@ -929,8 +931,12 @@ class Bloviate:
             # Restore only the keys this method owns.
             self.config.setdefault("ptt", {})["hotkey"] = old_config["hotkey"]
             self.config.setdefault("ptt", {})["secondary_hotkey"] = old_config["secondary_hotkey"]
+            self.config.setdefault("ptt", {})["toggle_hotkey"] = old_config["toggle_hotkey"]
             self.config.setdefault("window_management", {})["command_hotkey"] = old_config["command_hotkey"]
             self.config.setdefault("window_management", {})["hotkey_prefix"] = old_config["hotkey_prefix"]
+            self.config.setdefault("window_management", {})["voice_command_prefixes"] = old_config[
+                "voice_command_prefixes"
+            ]
             self.settings_service.save()
             return False, f"Invalid hotkey settings: {exc}"
 
@@ -941,6 +947,7 @@ class Bloviate:
             except Exception as exc:
                 print(f"Error stopping old PTT handler: {exc}")
         self.ptt_handler = candidate
+        self._setup_toggle_hotkey()
         if listener_was_running:
             self.ptt_handler.start(
                 on_press=self.on_ptt_press,
@@ -1322,6 +1329,32 @@ class Bloviate:
             if self.ui_window:
                 self.ui_window.signals.update_status.emit("No audio recorded")
 
+    def toggle_ptt_recording(self):
+        """Toggle dictation recording without requiring the PTT keys to be held."""
+        if self._shutdown_event.is_set() or self.is_command_recording:
+            return
+        if self.is_recording:
+            print("[PTT] Toggle off")
+            self.on_ptt_release()
+        else:
+            print("[PTT] Toggle on")
+            self.on_ptt_press()
+
+    def _setup_toggle_hotkey(self):
+        """Register the optional toggle-dictation hotkey."""
+        toggle_hotkey = str(
+            self.config.get("ptt", {}).get("toggle_hotkey", "<cmd>+<option>+<shift>") or ""
+        ).strip()
+        if not toggle_hotkey:
+            return
+        self.ptt_handler.add_hotkey(
+            "toggle_dictation",
+            toggle_hotkey,
+            on_press=self.toggle_ptt_recording,
+            match_exact=True,
+            consume=True,
+        )
+
     def on_command_press(self):
         """Called when command mode PTT is activated."""
         if self._shutdown_event.is_set():
@@ -1380,32 +1413,78 @@ class Bloviate:
 
         return None
 
+    def _voice_command_prefixes(self) -> list[str]:
+        """Return normalized phrase prefixes that turn dictation into commands."""
+        configured = self.config.get("window_management", {}).get(
+            "voice_command_prefixes",
+            ["run command", "screen", "window", "desktop"],
+        )
+        if isinstance(configured, str):
+            configured = [configured]
+        prefixes = []
+        seen = set()
+        for raw_prefix in configured or []:
+            normalized = self._normalize_command_text(str(raw_prefix)).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            prefixes.append(normalized)
+        return prefixes or ["run command", "screen", "window", "desktop"]
+
+    def _parse_prefixed_voice_command(self, text: str) -> tuple[Optional[str], str]:
+        """Parse inline dictation commands such as 'screen left half'."""
+        normalized = self._normalize_command_text(text)
+        if not normalized:
+            return None, ""
+
+        prefixes = self._voice_command_prefixes()
+        window_suffixes = sorted_aliases(WINDOW_PREFIX_SUFFIXES)
+        desktop_suffixes = sorted_aliases(DESKTOP_PREFIX_SUFFIXES)
+
+        def contains(phrase: str) -> bool:
+            return f" {phrase} " in normalized
+
+        for prefix in prefixes:
+            if prefix == "desktop":
+                for suffix, command in desktop_suffixes:
+                    phrase = f"desktop {suffix}"
+                    if contains(phrase):
+                        return command, phrase
+                continue
+
+            for suffix, command in window_suffixes:
+                phrase = f"{prefix} {suffix}"
+                if contains(phrase):
+                    return command, phrase
+
+            if prefix in {"run command", "command"}:
+                for suffix, command in window_suffixes:
+                    for scope in ("screen", "window"):
+                        phrase = f"{prefix} {scope} {suffix}"
+                        if contains(phrase):
+                            return command, phrase
+                for suffix, command in desktop_suffixes:
+                    phrase = f"{prefix} desktop {suffix}"
+                    if contains(phrase):
+                        return command, phrase
+
+        return None, ""
+
     def _try_voice_command(self, text: str) -> bool:
         """Check if dictated text contains a voice command (window/desktop).
 
-        Looks for 'window <command>' or 'desktop <command>' patterns.
+        Looks for configured command prefixes such as 'run command',
+        'screen', 'window', and 'desktop'.
         Returns True if a command was found and executed.
         """
         if not self.window_manager:
             return False
 
-        normalized = self._normalize_command_text(text)
-        if not normalized:
-            return False
-
-        # Check for "window <command>"
-        for suffix, position in sorted_aliases(WINDOW_PREFIX_SUFFIXES):
-            if f" window {suffix} " in normalized:
-                print(f"[VOICE CMD] Matched 'window {suffix}' → {position}")
-                self._execute_voice_command(position, text)
-                return True
-
-        # Check for "desktop <command>"
-        for suffix, position in sorted_aliases(DESKTOP_PREFIX_SUFFIXES):
-            if f" desktop {suffix} " in normalized:
-                print(f"[VOICE CMD] Matched 'desktop {suffix}' → {position}")
-                self._execute_voice_command(position, text)
-                return True
+        command, phrase = self._parse_prefixed_voice_command(text)
+        if command:
+            print(f"[VOICE CMD] Matched '{phrase}' → {command}")
+            self._execute_voice_command(command, text)
+            return True
 
         return False
 
@@ -1487,6 +1566,45 @@ class Bloviate:
             )
         except Exception as exc:
             print(f"[History] Could not record transcript: {exc}")
+
+    def _transcribe_dictation_audio(self, audio_for_transcription: np.ndarray, stream_text: Optional[str]):
+        """Return final dictation text/provider for accepted or rejected voice clips."""
+        transcription_cfg = self.config.get("transcription", {})
+        final_pass_mode = str(transcription_cfg.get("final_pass", "hybrid")).strip().lower()
+        if final_pass_mode not in {"hybrid", "prerecorded", "streaming"}:
+            print(f"Unknown transcription.final_pass '{final_pass_mode}', defaulting to hybrid")
+            final_pass_mode = "hybrid"
+
+        final_provider_order = self.transcriber.get_final_pass_provider_priority()
+        provider_used = "deepgram_streaming" if stream_text else ""
+        if not stream_text and not self.noise_suppressor.has_speech(audio_for_transcription):
+            print("[Audio] Skipping final-pass transcription: clip does not contain enough speech")
+            return None, provider_used
+
+        if final_pass_mode == "streaming":
+            text = stream_text
+            if not text:
+                print("[Final] Streaming transcript unavailable, trying final-pass providers")
+                text, provider_used = self.transcriber.transcribe_with_priority(
+                    audio_for_transcription, final_provider_order, mode="dictation"
+                )
+                if provider_used:
+                    print(f"[Final] Used provider: {provider_used}")
+            return text, provider_used
+
+        text = None
+        final_text, provider_used = self.transcriber.transcribe_with_priority(
+            audio_for_transcription, final_provider_order, mode="dictation"
+        )
+        if final_text:
+            text = final_text
+            if provider_used:
+                print(f"[Final] Used provider: {provider_used}")
+            if final_pass_mode == "hybrid" and stream_text and stream_text != final_text:
+                print("[Final] Using higher-accuracy final pass instead of streaming text")
+        elif final_pass_mode == "hybrid":
+            text = stream_text
+        return text, provider_used
 
     def process_command_recording(self, recorded_chunks=None):
         """Process the recorded command audio."""
@@ -1624,49 +1742,42 @@ class Bloviate:
         if not self.talk_mode and not is_match:
             print("✗ Voice rejected - does not match enrolled profile")
             if self.ui_window:
-                self.ui_window.signals.update_status.emit("Voice rejected")
+                self.ui_window.signals.update_status.emit("Voice rejected; saving transcript to history...")
+            text, provider_used = self._transcribe_dictation_audio(audio_for_transcription, stream_text)
+            if self._shutdown_event.is_set():
+                return
+            if text:
+                context = self._active_target_context()
+                processed = self.post_processor.process(
+                    text,
+                    target_app=context.get("target_app", ""),
+                )
+                output_text = processed.text
+                if processed.changed:
+                    print(f"[Post-processing] rejected {processed.mode}/{processed.provider}: {output_text}")
+                self._record_history(
+                    text=output_text,
+                    original_text=processed.original_text,
+                    mode="dictation_rejected",
+                    post_processing_mode=processed.mode,
+                    provider=provider_used,
+                    voice_score=similarity,
+                    duration_s=len(raw_audio) / self.config["audio"]["sample_rate"],
+                    output_action="voice_rejected_history_only",
+                )
+                if self.ui_window:
+                    self.ui_window.signals.update_rejected_transcription.emit(output_text)
+                    self.ui_window.signals.update_status.emit("Voice rejected; transcript saved to history")
+            else:
+                if self.ui_window:
+                    self.ui_window.signals.update_status.emit("Voice rejected")
             return
 
         # Transcribe (use streaming result if available)
         if self.ui_window:
             self.ui_window.signals.update_status.emit("Transcribing...")
 
-        transcription_cfg = self.config.get("transcription", {})
-        final_pass_mode = str(transcription_cfg.get("final_pass", "hybrid")).strip().lower()
-        if final_pass_mode not in {"hybrid", "prerecorded", "streaming"}:
-            print(f"Unknown transcription.final_pass '{final_pass_mode}', defaulting to hybrid")
-            final_pass_mode = "hybrid"
-
-        final_provider_order = self.transcriber.get_final_pass_provider_priority()
-        text = None
-        provider_used = "deepgram_streaming" if stream_text else ""
-        if not stream_text and not self.noise_suppressor.has_speech(audio_for_transcription):
-            print("[Audio] Skipping final-pass transcription: clip does not contain enough speech")
-            if self.ui_window:
-                self.ui_window.signals.update_status.emit("No speech detected")
-            return
-
-        if final_pass_mode == "streaming":
-            text = stream_text
-            if not text:
-                print("[Final] Streaming transcript unavailable, trying final-pass providers")
-                text, provider_used = self.transcriber.transcribe_with_priority(
-                    audio_for_transcription, final_provider_order, mode="dictation"
-                )
-                if provider_used:
-                    print(f"[Final] Used provider: {provider_used}")
-        else:
-            final_text, provider_used = self.transcriber.transcribe_with_priority(
-                audio_for_transcription, final_provider_order, mode="dictation"
-            )
-            if final_text:
-                text = final_text
-                if provider_used:
-                    print(f"[Final] Used provider: {provider_used}")
-                if final_pass_mode == "hybrid" and stream_text and stream_text != final_text:
-                    print("[Final] Using higher-accuracy final pass instead of streaming text")
-            elif final_pass_mode == "hybrid":
-                text = stream_text
+        text, provider_used = self._transcribe_dictation_audio(audio_for_transcription, stream_text)
 
         if text:
             print(f"✓ Transcribed: {text}")
@@ -1864,6 +1975,7 @@ class Bloviate:
                 self.ui_window.signals.update_status.emit("Microphone permission needed")
 
         # Start PTT handler
+        self._setup_toggle_hotkey()
         try:
             self.ptt_handler.start(
                 on_press=self.on_ptt_press,
