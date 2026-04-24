@@ -86,6 +86,65 @@ class NoiseSuppressor:
             energy = np.sqrt(np.mean(audio ** 2))
             return energy > 0.01
 
+    def speech_stats(self, audio: np.ndarray) -> dict:
+        """Estimate whether a longer clip contains speech-like frames."""
+        audio = audio.squeeze()
+        if len(audio) == 0:
+            return {
+                "rms": 0.0,
+                "frames": 0,
+                "speech_frames": 0,
+                "speech_ratio": 0.0,
+            }
+
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        frame_duration_ms = 20
+        frame_size = int(self.sample_rate * frame_duration_ms / 1000)
+        if frame_size <= 0:
+            return {
+                "rms": rms,
+                "frames": 0,
+                "speech_frames": 0,
+                "speech_ratio": 0.0,
+            }
+
+        audio_int16 = np.clip(audio * 32768, -32768, 32767).astype(np.int16)
+        total_frames = 0
+        speech_frames = 0
+
+        for start in range(0, len(audio_int16) - frame_size + 1, frame_size):
+            frame = audio_int16[start:start + frame_size]
+            total_frames += 1
+            try:
+                if self.vad.is_speech(frame.tobytes(), self.sample_rate):
+                    speech_frames += 1
+            except Exception:
+                frame_audio = frame.astype(np.float32) / 32768.0
+                frame_rms = float(np.sqrt(np.mean(frame_audio ** 2)))
+                if frame_rms > 0.01:
+                    speech_frames += 1
+
+        speech_ratio = (speech_frames / total_frames) if total_frames else 0.0
+        return {
+            "rms": rms,
+            "frames": total_frames,
+            "speech_frames": speech_frames,
+            "speech_ratio": speech_ratio,
+        }
+
+    def has_speech(self, audio: np.ndarray) -> bool:
+        """Return True when a clip contains enough speech-like energy to transcribe."""
+        stats = self.speech_stats(audio)
+        min_rms = float(self.config['noise_suppression'].get('speech_min_rms', 0.003))
+        min_speech_frames = int(self.config['noise_suppression'].get('speech_min_frames', 3))
+        min_speech_ratio = float(self.config['noise_suppression'].get('speech_min_ratio', 0.12))
+
+        if stats["rms"] < min_rms:
+            return False
+        if stats["speech_frames"] >= min_speech_frames:
+            return True
+        return stats["speech_ratio"] >= min_speech_ratio
+
     def update_noise_profile(self, audio: np.ndarray):
         """Update the noise profile with background audio."""
         if not self.is_speech(audio):

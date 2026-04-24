@@ -48,6 +48,10 @@ def logs_dir() -> Path:
     return app_support_dir() / "logs"
 
 
+def history_db_path() -> Path:
+    return app_support_dir() / "history.sqlite"
+
+
 def models_dir() -> Path:
     return app_support_dir() / "models"
 
@@ -134,6 +138,7 @@ def describe_paths() -> Dict[str, Path]:
     return {
         "home": app_support_dir(),
         "config": config_path(),
+        "history": history_db_path(),
         "logs": logs_dir(),
         "models": models_dir(),
         "personal_dictionary": personal_dictionary_path(),

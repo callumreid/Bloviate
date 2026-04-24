@@ -16,6 +16,8 @@ That is the right story to tell in the short term:
 - Voice enrollment and verification are implemented
 - Streaming plus final-pass transcription is in place
 - Personal dictionary support exists
+- Settings now exposes audio input, hotkeys, dictation mode, provider/model selection, API-key storage, dictionary editing, local history, cleanup, startup options, and doctor output
+- Local transcript history is text-only and stored in `history.sqlite`
 - The app now has a built-in preflight:
   - `python src/main.py --doctor`
   - `python src/main.py --list-devices`
@@ -28,30 +30,11 @@ That is the right story to tell in the short term:
 
 ### 1. Installation Story
 
-Right now the product is still repo-first:
+The beta install path is now Homebrew prerequisites plus `pipx`, which is acceptable for technical users but not a normal consumer launch.
 
-- clone repo
-- create venv
-- install Python dependencies
-- manage environment variables manually
+### 2. User Data Needs More Privacy Polish
 
-That is acceptable for a beta audience, but not for a normal product launch.
-
-### 2. User Configuration Still Lives In The Repo
-
-Today the app assumes a repo checkout with tracked config files nearby.
-
-For broader use, config and user data should move to per-user locations:
-
-- `~/Library/Application Support/Bloviate/...`
-- `~/Library/Preferences/...`
-
-That includes:
-
-- user config
-- voice profile
-- personal dictionary
-- logs
+Config and user data now live under `~/Library/Application Support/Bloviate`, including local transcript history. Before broader release, history needs stronger user-facing privacy controls and possibly retention policies.
 
 ### 3. macOS Permissions Are A Product Surface
 
@@ -100,14 +83,14 @@ If the goal is "other people can try this soon," the best path is:
 ### Tier 1: Do These Before The Talk If Possible
 
 - Keep the share scope to macOS
-- Add a one-command install path or packaged app
+- Keep Homebrew + `pipx` as the beta install path
+- Add a signed/notarized `.app` after beta feedback
 - Add a first-run onboarding checklist to the README
 - Keep defaults safe for strangers, not optimized for one personal setup
 - Make it obvious how to recover from audio / permission failures
 
 ### Tier 2: Do These Next For A Real External Beta
 
-- Move config and user data out of the repo
 - Add structured logs and a user-visible log file location
 - Add a tiny smoke-test suite and CI
 - Add a release process for tagged builds

@@ -12,6 +12,7 @@ class PTTHandler:
 
     def __init__(self, config: dict):
         self.config = config
+        self.verbose_logs = bool(config.get("app", {}).get("verbose_logs", False))
         ptt_config = config.get('ptt', {})
         raw_hotkeys = self._resolve_hotkey_strs(ptt_config)
 
@@ -32,7 +33,8 @@ class PTTHandler:
         for hotkey_str in raw_hotkeys:
             hotkey_set = self._parse_hotkey(hotkey_str)
             if not hotkey_set:
-                print(f"Warning: Hotkey '{hotkey_str}' has no valid keys; skipping.")
+                if self.verbose_logs:
+                    print(f"Warning: Hotkey '{hotkey_str}' has no valid keys; skipping.")
                 continue
             self.hotkey_strs.append(hotkey_str)
             self.hotkeys.append(hotkey_set)
@@ -158,7 +160,8 @@ class PTTHandler:
         """
         hotkey_set = self._parse_hotkey(hotkey_str)
         if not hotkey_set:
-            print(f"Warning: Hotkey '{hotkey_str}' has no valid keys; ignoring.")
+            if self.verbose_logs:
+                print(f"Warning: Hotkey '{hotkey_str}' has no valid keys; ignoring.")
             return
         self.additional_hotkeys[name] = {
             'hotkey': hotkey_set,
@@ -167,7 +170,8 @@ class PTTHandler:
             'is_active': False,
             'match_exact': match_exact
         }
-        print(f"Added hotkey '{name}': {hotkey_str}")
+        if self.verbose_logs:
+            print(f"Added hotkey '{name}': {hotkey_str}")
 
     def _on_press(self, key):
         """Handle key press events."""
@@ -232,10 +236,11 @@ class PTTHandler:
         )
         self.listener.start()
 
-        if len(self.hotkey_strs) > 1:
-            print(f"PTT handler started with hotkeys: {', '.join(self.hotkey_strs)}")
-        else:
-            print(f"PTT handler started with hotkey: {self.hotkey_str}")
+        if self.verbose_logs:
+            if len(self.hotkey_strs) > 1:
+                print(f"PTT handler started with hotkeys: {', '.join(self.hotkey_strs)}")
+            else:
+                print(f"PTT handler started with hotkey: {self.hotkey_str}")
 
     def stop(self, join_timeout: float = 1.0):
         """Stop listening for keyboard events."""
@@ -251,7 +256,8 @@ class PTTHandler:
         if listener:
             listener.stop()
             listener.join(timeout=join_timeout)
-            print("PTT handler stopped")
+            if self.verbose_logs:
+                print("PTT handler stopped")
 
     def wait(self):
         """Wait for the listener thread to finish."""

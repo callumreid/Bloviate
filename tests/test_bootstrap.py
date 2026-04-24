@@ -43,6 +43,19 @@ class BootstrapTests(unittest.TestCase):
         self.assertTrue(dictionary_path.exists())
         self.assertIn("preferred_terms", dictionary_path.read_text(encoding="utf-8"))
 
+    def test_save_config_strips_runtime_metadata(self):
+        config, path = main._load_config("config.yaml")
+        config["audio"]["device_name"] = "AirPods Pro"
+        config["__temp"] = "ignore me"
+
+        saved_path = main._save_config(config)
+
+        self.assertEqual(saved_path, path)
+        saved_text = path.read_text(encoding="utf-8")
+        self.assertIn("device_name: AirPods Pro", saved_text)
+        self.assertNotIn("__config_path__", saved_text)
+        self.assertNotIn("__temp", saved_text)
+
 
 if __name__ == "__main__":
     unittest.main()

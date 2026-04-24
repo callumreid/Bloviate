@@ -5,12 +5,17 @@ Shows audio levels, voice detection status, and PTT state.
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
-    QHBoxLayout, QLabel, QProgressBar, QSystemTrayIcon, QMenu
+    QHBoxLayout, QLabel, QProgressBar, QSystemTrayIcon, QMenu,
+    QComboBox, QPushButton, QFrame, QTabWidget, QGroupBox,
+    QSlider, QCheckBox, QMessageBox, QScrollArea, QLineEdit,
+    QTextEdit, QFormLayout, QTableWidget, QTableWidgetItem,
+    QHeaderView, QAbstractItemView, QFileDialog
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker
 from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter
 import sys
 import numpy as np
+import yaml
 
 
 class UISignals(QObject):
@@ -28,6 +33,7 @@ class MenuBarIndicator:
     """Menu bar indicator showing status with emoji and audio level."""
 
     def __init__(self, parent=None):
+        self.parent = parent
         self.tray_icon = QSystemTrayIcon(parent)
         self.audio_level = 0
         self.current_state = "idle"  # idle, recording, processing, success, rejected, command_*
@@ -40,14 +46,64 @@ class MenuBarIndicator:
         # Create context menu
         menu = QMenu()
         menu.addAction("Show Window", self._show_main_window)
+        menu.addAction("Open Settings", self._open_settings)
+        self.audio_menu = menu.addMenu("Input Device")
         menu.addAction("Quit", self._quit_app)
         self.tray_icon.setContextMenu(menu)
+        self.refresh_audio_inputs_menu()
 
         # Set initial icon
         self._update_icon()
         self.tray_icon.show()
 
-        self.parent = parent
+    def refresh_audio_inputs_menu(self):
+        """Rebuild the tray-menu audio input submenu."""
+        self.audio_menu.clear()
+
+        if not self.parent or not hasattr(self.parent, "get_audio_input_options"):
+            unavailable = self.audio_menu.addAction("Unavailable")
+            unavailable.setEnabled(False)
+            return
+
+        try:
+            devices = self.parent.get_audio_input_options() or []
+            current = self.parent.get_current_audio_input_name()
+        except Exception as exc:
+            failed = self.audio_menu.addAction(f"Error: {exc}")
+            failed.setEnabled(False)
+            return
+
+        self._add_audio_input_action("System Default", "", checked=not current)
+
+        if devices:
+            self.audio_menu.addSeparator()
+            for device in devices:
+                label = str(device.get("name", "Unknown Input"))
+                if device.get("is_default"):
+                    label += " (Default)"
+                channels = int(device.get("channels", 0))
+                if channels:
+                    label += f" [{channels}ch]"
+                name = str(device.get("name", "") or "").strip()
+                self._add_audio_input_action(label, name, checked=(name == current))
+
+        self.audio_menu.addSeparator()
+        self.audio_menu.addAction("Refresh Inputs", self.refresh_audio_inputs_menu)
+
+    def _add_audio_input_action(self, label: str, device_name: str, *, checked: bool):
+        """Add one audio-input choice to the tray menu."""
+        action = self.audio_menu.addAction(label)
+        action.setCheckable(True)
+        action.setChecked(checked)
+        action.triggered.connect(
+            lambda _checked=False, selected=device_name: self._select_audio_input(selected)
+        )
+
+    def _select_audio_input(self, device_name: str):
+        """Switch the current audio input from the tray menu."""
+        if self.parent and hasattr(self.parent, "switch_audio_input"):
+            self.parent.switch_audio_input(device_name)
+        self.refresh_audio_inputs_menu()
 
     def _show_main_window(self):
         """Show the main window."""
@@ -56,8 +112,18 @@ class MenuBarIndicator:
             self.parent.raise_()
             self.parent.activateWindow()
 
+    def _open_settings(self):
+        """Open settings tab in the main window."""
+        if self.parent and hasattr(self.parent, "show_settings_tab"):
+            self.parent.show_settings_tab()
+            return
+        self._show_main_window()
+
     def _quit_app(self):
         """Quit the application."""
+        if self.parent and hasattr(self.parent, "request_quit"):
+            self.parent.request_quit()
+            return
         QApplication.instance().quit()
 
     def _create_icon(self, text: str, color: QColor = None) -> QIcon:
@@ -574,9 +640,68 @@ class BottomOverlayIndicator(QWidget):
 class BloviateUI(QMainWindow):
     """Minimal UI showing real-time feedback."""
 
-    def __init__(self, config: dict):
+    def __init__(
+        self,
+        config: dict,
+        get_audio_inputs=None,
+        set_audio_input=None,
+        get_voice_profile_status=None,
+        set_voice_mode=None,
+        set_voice_threshold=None,
+        capture_enrollment_sample=None,
+        clear_voice_profile=None,
+        get_personal_dictionary_path=None,
+        ensure_personal_dictionary_exists=None,
+        open_personal_dictionary=None,
+        reload_personal_dictionary=None,
+        get_personal_dictionary_payload=None,
+        save_personal_dictionary_payload=None,
+        get_model_options=None,
+        get_secret_statuses=None,
+        set_api_key=None,
+        set_transcription_settings=None,
+        set_hotkey_settings=None,
+        set_general_settings=None,
+        get_history_records=None,
+        delete_history_record=None,
+        clear_history=None,
+        export_history=None,
+        run_doctor_text=None,
+        reset_settings_to_defaults=None,
+        set_show_main_window_on_startup=None,
+        set_startup_splash_enabled=None,
+        set_terminal_startup_animation_enabled=None,
+    ):
         super().__init__()
         self.config = config
+        self.get_audio_inputs = get_audio_inputs
+        self.set_audio_input = set_audio_input
+        self.get_voice_profile_status = get_voice_profile_status
+        self.set_voice_mode = set_voice_mode
+        self.set_voice_threshold = set_voice_threshold
+        self.capture_enrollment_sample = capture_enrollment_sample
+        self.clear_voice_profile = clear_voice_profile
+        self.get_personal_dictionary_path = get_personal_dictionary_path
+        self.ensure_personal_dictionary_exists = ensure_personal_dictionary_exists
+        self.open_personal_dictionary = open_personal_dictionary
+        self.reload_personal_dictionary = reload_personal_dictionary
+        self.get_personal_dictionary_payload = get_personal_dictionary_payload
+        self.save_personal_dictionary_payload = save_personal_dictionary_payload
+        self.get_model_options = get_model_options
+        self.get_secret_statuses = get_secret_statuses
+        self.set_api_key = set_api_key
+        self.set_transcription_settings = set_transcription_settings
+        self.set_hotkey_settings = set_hotkey_settings
+        self.set_general_settings = set_general_settings
+        self.get_history_records = get_history_records
+        self.delete_history_record = delete_history_record
+        self.clear_history = clear_history
+        self.export_history = export_history
+        self.run_doctor_text = run_doctor_text
+        self.reset_settings_to_defaults = reset_settings_to_defaults
+        self.set_show_main_window_on_startup = set_show_main_window_on_startup
+        self.set_startup_splash_enabled = set_startup_splash_enabled
+        self.set_terminal_startup_animation_enabled = set_terminal_startup_animation_enabled
         self.signals = UISignals()
         self._closing = False
 
@@ -602,6 +727,10 @@ class BloviateUI(QMainWindow):
         self._last_final_text = ""
         self._transcription_style_final = ""
         self._transcription_style_interim = ""
+        self._audio_inputs_ready = bool(self.get_audio_inputs and self.set_audio_input)
+        self._settings_status_default_style = "font-size: 12px; color: #9E9E9E;"
+        self._settings_ok_style = "font-size: 12px; color: #8BC34A;"
+        self._settings_error_style = "font-size: 12px; color: #EF5350;"
 
         self.init_ui()
 
@@ -611,7 +740,7 @@ class BloviateUI(QMainWindow):
 
         # Set window size
         width, height = self.config['ui']['window_size']
-        self.resize(width, height)
+        self.resize(max(width, 520), max(height, 420))
 
         # Apply dark theme
         if self.config['ui']['theme'] == 'dark':
@@ -624,6 +753,21 @@ class BloviateUI(QMainWindow):
         # Main layout
         layout = QVBoxLayout()
         central_widget.setLayout(layout)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+        self.status_tab = QWidget()
+        self.settings_tab = QWidget()
+        self.tabs.addTab(self.status_tab, "Status")
+        self.tabs.addTab(self.settings_tab, "Settings")
+        self._build_status_tab()
+        self._build_settings_tab()
+        self._refresh_audio_inputs()
+        self._refresh_voice_controls()
+        self._refresh_dictionary_path()
+
+    def _build_status_tab(self):
+        layout = QVBoxLayout()
+        self.status_tab.setLayout(layout)
 
         # PTT Status
         self.ptt_label = QLabel("PTT: Inactive")
@@ -676,8 +820,1021 @@ class BloviateUI(QMainWindow):
         )
         self.transcription_label.setStyleSheet(self._transcription_style_final)
         layout.addWidget(self.transcription_label)
+        layout.addStretch()
+
+    def _build_settings_tab(self):
+        outer_layout = QVBoxLayout()
+        self.settings_tab.setLayout(outer_layout)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setSpacing(12)
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll)
+
+        # Audio settings
+        audio_group = QGroupBox("Audio Input")
+        audio_layout = QVBoxLayout(audio_group)
+        device_layout = QHBoxLayout()
+        self.device_combo = QComboBox()
+        self.device_combo.setMinimumContentsLength(24)
+        self.device_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.refresh_devices_button = QPushButton("Refresh")
+        self.apply_device_button = QPushButton("Apply")
+        device_layout.addWidget(self.device_combo, 1)
+        device_layout.addWidget(self.refresh_devices_button)
+        device_layout.addWidget(self.apply_device_button)
+        audio_layout.addLayout(device_layout)
+        self.device_status_label = QLabel("")
+        self.device_status_label.setStyleSheet(self._settings_status_default_style)
+        audio_layout.addWidget(self.device_status_label)
+        layout.addWidget(audio_group)
+
+        self.refresh_devices_button.clicked.connect(self._refresh_audio_inputs)
+        self.apply_device_button.clicked.connect(self._apply_selected_audio_input)
+
+        # Hotkeys
+        hotkey_group = QGroupBox("Input & Hotkeys")
+        hotkey_layout = QFormLayout(hotkey_group)
+        self.ptt_hotkey_edit = QLineEdit(str(self.config.get("ptt", {}).get("hotkey", "")))
+        self.ptt_secondary_hotkey_edit = QLineEdit(
+            str(self.config.get("ptt", {}).get("secondary_hotkey", ""))
+        )
+        self.command_hotkey_edit = QLineEdit(
+            str(self.config.get("window_management", {}).get("command_hotkey", ""))
+        )
+        self.window_prefix_hotkey_edit = QLineEdit(
+            str(self.config.get("window_management", {}).get("hotkey_prefix", ""))
+        )
+        for edit in (
+            self.ptt_hotkey_edit,
+            self.ptt_secondary_hotkey_edit,
+            self.command_hotkey_edit,
+            self.window_prefix_hotkey_edit,
+        ):
+            edit.setPlaceholderText("<cmd>+<option>")
+        hotkey_layout.addRow("Primary PTT:", self.ptt_hotkey_edit)
+        hotkey_layout.addRow("Secondary PTT:", self.ptt_secondary_hotkey_edit)
+        hotkey_layout.addRow("Command PTT:", self.command_hotkey_edit)
+        hotkey_layout.addRow("Window prefix:", self.window_prefix_hotkey_edit)
+        hotkey_actions = QHBoxLayout()
+        self.apply_hotkeys_button = QPushButton("Apply Hotkeys")
+        hotkey_actions.addWidget(self.apply_hotkeys_button)
+        hotkey_actions.addStretch()
+        hotkey_layout.addRow("", hotkey_actions)
+        self.hotkey_status_label = QLabel("")
+        self.hotkey_status_label.setStyleSheet(self._settings_status_default_style)
+        hotkey_layout.addRow("", self.hotkey_status_label)
+        layout.addWidget(hotkey_group)
+        self.apply_hotkeys_button.clicked.connect(self._apply_hotkey_settings)
+
+        # Voice settings
+        voice_group = QGroupBox("Voice Verification")
+        voice_layout = QVBoxLayout(voice_group)
+
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("Mode:"))
+        self.voice_mode_combo = QComboBox()
+        self.voice_mode_combo.addItem("Whisper (Verify Speaker)", "whisper")
+        self.voice_mode_combo.addItem("Talk (Bypass Verification)", "talk")
+        self.apply_voice_mode_button = QPushButton("Apply Mode")
+        mode_layout.addWidget(self.voice_mode_combo, 1)
+        mode_layout.addWidget(self.apply_voice_mode_button)
+        voice_layout.addLayout(mode_layout)
+
+        threshold_header = QHBoxLayout()
+        threshold_header.addWidget(QLabel("Sensitivity:"))
+        self.voice_threshold_value = QLabel("--")
+        threshold_header.addStretch()
+        threshold_header.addWidget(self.voice_threshold_value)
+        voice_layout.addLayout(threshold_header)
+
+        self.voice_threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.voice_threshold_slider.setMinimum(30)
+        self.voice_threshold_slider.setMaximum(95)
+        self.voice_threshold_slider.setSingleStep(1)
+        self.voice_threshold_slider.setPageStep(2)
+        voice_layout.addWidget(self.voice_threshold_slider)
+
+        threshold_actions = QHBoxLayout()
+        self.apply_voice_threshold_button = QPushButton("Apply Sensitivity")
+        threshold_actions.addWidget(self.apply_voice_threshold_button)
+        threshold_actions.addStretch()
+        voice_layout.addLayout(threshold_actions)
+
+        self.voice_profile_label = QLabel("Profile: --")
+        self.voice_profile_label.setStyleSheet(self._settings_status_default_style)
+        voice_layout.addWidget(self.voice_profile_label)
+
+        profile_actions = QHBoxLayout()
+        self.capture_sample_button = QPushButton("Record 3s Sample")
+        self.clear_profile_button = QPushButton("Reset Profile")
+        profile_actions.addWidget(self.capture_sample_button)
+        profile_actions.addWidget(self.clear_profile_button)
+        voice_layout.addLayout(profile_actions)
+
+        self.voice_settings_status_label = QLabel("")
+        self.voice_settings_status_label.setStyleSheet(self._settings_status_default_style)
+        voice_layout.addWidget(self.voice_settings_status_label)
+        layout.addWidget(voice_group)
+
+        self.apply_voice_mode_button.clicked.connect(self._apply_voice_mode)
+        self.apply_voice_threshold_button.clicked.connect(self._apply_voice_threshold)
+        self.capture_sample_button.clicked.connect(self._capture_voice_sample)
+        self.clear_profile_button.clicked.connect(self._clear_voice_profile)
+        self.voice_threshold_slider.valueChanged.connect(self._update_threshold_preview)
+
+        # Dictation behavior
+        dictation_group = QGroupBox("Dictation")
+        dictation_layout = QFormLayout(dictation_group)
+        tx_cfg = self.config.get("transcription", {})
+        ns_cfg = self.config.get("noise_suppression", {})
+        self.final_pass_combo = QComboBox()
+        for value in self._model_options().get("final_pass_modes", ["hybrid", "prerecorded", "streaming"]):
+            self.final_pass_combo.addItem(value.title(), value)
+        self._set_combo_data(self.final_pass_combo, tx_cfg.get("final_pass", "hybrid"))
+        self.output_format_combo = QComboBox()
+        for value in self._model_options().get("output_formats", ["clipboard", "stdout", "both"]):
+            self.output_format_combo.addItem(value.title(), value)
+        self._set_combo_data(self.output_format_combo, tx_cfg.get("output_format", "clipboard"))
+        self.auto_paste_checkbox = QCheckBox("Auto-paste after transcription")
+        self.auto_paste_checkbox.setChecked(bool(tx_cfg.get("auto_paste", False)))
+        self.use_dictionary_checkbox = QCheckBox("Apply dictionary corrections")
+        self.use_dictionary_checkbox.setChecked(bool(tx_cfg.get("use_custom_dictionary", True)))
+        self.noise_suppression_checkbox = QCheckBox("Enable noise suppression")
+        self.noise_suppression_checkbox.setChecked(bool(ns_cfg.get("enabled", True)))
+        self.history_enabled_checkbox = QCheckBox("Save local transcript history")
+        self.history_enabled_checkbox.setChecked(bool(self.config.get("history", {}).get("enabled", True)))
+        dictation_layout.addRow("Final pass:", self.final_pass_combo)
+        dictation_layout.addRow("Output:", self.output_format_combo)
+        dictation_layout.addRow("", self.auto_paste_checkbox)
+        dictation_layout.addRow("", self.use_dictionary_checkbox)
+        dictation_layout.addRow("", self.noise_suppression_checkbox)
+        dictation_layout.addRow("", self.history_enabled_checkbox)
+        dictation_actions = QHBoxLayout()
+        self.apply_dictation_button = QPushButton("Apply Dictation Settings")
+        dictation_actions.addWidget(self.apply_dictation_button)
+        dictation_actions.addStretch()
+        dictation_layout.addRow("", dictation_actions)
+        self.dictation_status_label = QLabel("")
+        self.dictation_status_label.setStyleSheet(self._settings_status_default_style)
+        dictation_layout.addRow("", self.dictation_status_label)
+        layout.addWidget(dictation_group)
+        self.apply_dictation_button.clicked.connect(self._apply_dictation_settings)
+
+        # Models and providers
+        model_group = QGroupBox("Models & Providers")
+        model_layout = QFormLayout(model_group)
+        self.provider_combo = QComboBox()
+        for provider in self._model_options().get("providers", []):
+            self.provider_combo.addItem(provider.get("label", provider.get("value", "")), provider.get("value", ""))
+        self._set_combo_data(self.provider_combo, tx_cfg.get("provider", "deepgram"))
+        self.whisper_model_combo = self._model_combo("whisper_models", tx_cfg.get("model", "medium.en"))
+        self.whisper_fallback_combo = self._model_combo(
+            "whisper_models", tx_cfg.get("whisper_fallback_model", "medium.en")
+        )
+        self.deepgram_model_combo = self._model_combo(
+            "deepgram_models", self.config.get("deepgram", {}).get("model", "nova-3")
+        )
+        self.deepgram_prerecorded_model_combo = self._model_combo(
+            "deepgram_models", self.config.get("deepgram", {}).get("prerecorded_model", "nova-3")
+        )
+        self.openai_model_combo = self._model_combo(
+            "openai_models", self.config.get("openai", {}).get("model", "gpt-4o-transcribe")
+        )
+        priority = tx_cfg.get("final_pass_provider_priority", ["openai", "deepgram", "whisper"])
+        if isinstance(priority, list):
+            priority = ", ".join(str(item) for item in priority)
+        self.provider_priority_edit = QLineEdit(str(priority))
+        self.openai_key_edit = QLineEdit()
+        self.openai_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.openai_key_edit.setPlaceholderText("Paste to save in Keychain")
+        self.deepgram_key_edit = QLineEdit()
+        self.deepgram_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.deepgram_key_edit.setPlaceholderText("Paste to save in Keychain")
+        model_layout.addRow("Primary provider:", self.provider_combo)
+        model_layout.addRow("Whisper model:", self.whisper_model_combo)
+        model_layout.addRow("Whisper fallback:", self.whisper_fallback_combo)
+        model_layout.addRow("Deepgram stream:", self.deepgram_model_combo)
+        model_layout.addRow("Deepgram final:", self.deepgram_prerecorded_model_combo)
+        model_layout.addRow("OpenAI STT:", self.openai_model_combo)
+        model_layout.addRow("Final priority:", self.provider_priority_edit)
+        model_layout.addRow("OpenAI key:", self.openai_key_edit)
+        model_layout.addRow("Deepgram key:", self.deepgram_key_edit)
+        model_actions = QHBoxLayout()
+        self.apply_models_button = QPushButton("Apply Models")
+        self.save_api_keys_button = QPushButton("Save API Keys")
+        model_actions.addWidget(self.apply_models_button)
+        model_actions.addWidget(self.save_api_keys_button)
+        model_actions.addStretch()
+        model_layout.addRow("", model_actions)
+        self.model_status_label = QLabel("")
+        self.model_status_label.setStyleSheet(self._settings_status_default_style)
+        model_layout.addRow("", self.model_status_label)
+        layout.addWidget(model_group)
+        self.apply_models_button.clicked.connect(self._apply_model_settings)
+        self.save_api_keys_button.clicked.connect(self._save_api_keys)
+        self._refresh_secret_status()
+
+        # Post-processing
+        cleanup_group = QGroupBox("Cleanup")
+        cleanup_layout = QFormLayout(cleanup_group)
+        pp_cfg = self.config.get("post_processing", {})
+        self.post_processing_mode_combo = QComboBox()
+        for value in self._model_options().get("post_processing_modes", ["verbatim", "clean", "coding", "message"]):
+            self.post_processing_mode_combo.addItem(value.title(), value)
+        self._set_combo_data(self.post_processing_mode_combo, pp_cfg.get("mode", "verbatim"))
+        self.openai_cleanup_checkbox = QCheckBox("Use OpenAI cleanup when available")
+        self.openai_cleanup_checkbox.setChecked(bool(pp_cfg.get("openai_enabled", False)))
+        self.cleanup_model_combo = self._model_combo(
+            "cleanup_models", pp_cfg.get("openai_model", "gpt-4o")
+        )
+        cleanup_layout.addRow("Mode:", self.post_processing_mode_combo)
+        cleanup_layout.addRow("OpenAI model:", self.cleanup_model_combo)
+        cleanup_layout.addRow("", self.openai_cleanup_checkbox)
+        cleanup_actions = QHBoxLayout()
+        self.apply_cleanup_button = QPushButton("Apply Cleanup")
+        cleanup_actions.addWidget(self.apply_cleanup_button)
+        cleanup_actions.addStretch()
+        cleanup_layout.addRow("", cleanup_actions)
+        self.cleanup_status_label = QLabel("")
+        self.cleanup_status_label.setStyleSheet(self._settings_status_default_style)
+        cleanup_layout.addRow("", self.cleanup_status_label)
+        layout.addWidget(cleanup_group)
+        self.apply_cleanup_button.clicked.connect(self._apply_cleanup_settings)
+
+        # Dictionary settings
+        dictionary_group = QGroupBox("Dictionary")
+        dictionary_layout = QVBoxLayout(dictionary_group)
+        self.dictionary_path_label = QLabel("")
+        self.dictionary_path_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.dictionary_path_label.setStyleSheet(self._settings_status_default_style)
+        dictionary_layout.addWidget(self.dictionary_path_label)
+
+        dictionary_actions = QHBoxLayout()
+        self.open_dictionary_button = QPushButton("Open")
+        self.reload_dictionary_button = QPushButton("Reload")
+        self.initialize_dictionary_button = QPushButton("Initialize")
+        dictionary_actions.addWidget(self.open_dictionary_button)
+        dictionary_actions.addWidget(self.reload_dictionary_button)
+        dictionary_actions.addWidget(self.initialize_dictionary_button)
+        dictionary_layout.addLayout(dictionary_actions)
+
+        self.dictionary_status_label = QLabel("")
+        self.dictionary_status_label.setStyleSheet(self._settings_status_default_style)
+        dictionary_layout.addWidget(self.dictionary_status_label)
+        dictionary_edit_layout = QHBoxLayout()
+        dictionary_terms_layout = QVBoxLayout()
+        dictionary_terms_layout.addWidget(QLabel("Preferred terms"))
+        self.dictionary_terms_edit = QTextEdit()
+        self.dictionary_terms_edit.setMinimumHeight(120)
+        dictionary_terms_layout.addWidget(self.dictionary_terms_edit)
+        dictionary_rules_layout = QVBoxLayout()
+        dictionary_rules_layout.addWidget(QLabel("Corrections YAML"))
+        self.dictionary_corrections_edit = QTextEdit()
+        self.dictionary_corrections_edit.setMinimumHeight(120)
+        dictionary_rules_layout.addWidget(self.dictionary_corrections_edit)
+        dictionary_edit_layout.addLayout(dictionary_terms_layout)
+        dictionary_edit_layout.addLayout(dictionary_rules_layout)
+        dictionary_layout.addLayout(dictionary_edit_layout)
+        dictionary_save_actions = QHBoxLayout()
+        self.load_dictionary_button = QPushButton("Load Into Editor")
+        self.save_dictionary_button = QPushButton("Save Dictionary")
+        dictionary_save_actions.addWidget(self.load_dictionary_button)
+        dictionary_save_actions.addWidget(self.save_dictionary_button)
+        dictionary_save_actions.addStretch()
+        dictionary_layout.addLayout(dictionary_save_actions)
+        layout.addWidget(dictionary_group)
+
+        self.open_dictionary_button.clicked.connect(self._open_dictionary)
+        self.reload_dictionary_button.clicked.connect(self._reload_dictionary)
+        self.initialize_dictionary_button.clicked.connect(self._initialize_dictionary)
+        self.load_dictionary_button.clicked.connect(self._load_dictionary_editor)
+        self.save_dictionary_button.clicked.connect(self._save_dictionary_editor)
+        self._load_dictionary_editor()
+
+        # History
+        history_group = QGroupBox("History")
+        history_layout = QVBoxLayout(history_group)
+        history_search_layout = QHBoxLayout()
+        self.history_search_edit = QLineEdit()
+        self.history_search_edit.setPlaceholderText("Search local transcript history")
+        self.refresh_history_button = QPushButton("Refresh")
+        history_search_layout.addWidget(self.history_search_edit, 1)
+        history_search_layout.addWidget(self.refresh_history_button)
+        history_layout.addLayout(history_search_layout)
+        self.history_table = QTableWidget(0, 5)
+        self.history_table.setHorizontalHeaderLabels(["Date", "Mode", "Provider", "Target", "Text"])
+        self.history_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.history_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.history_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.history_table.setMinimumHeight(180)
+        history_layout.addWidget(self.history_table)
+        history_actions = QHBoxLayout()
+        self.copy_history_button = QPushButton("Copy")
+        self.delete_history_button = QPushButton("Delete")
+        self.clear_history_button = QPushButton("Clear All")
+        self.export_history_button = QPushButton("Export CSV")
+        history_actions.addWidget(self.copy_history_button)
+        history_actions.addWidget(self.delete_history_button)
+        history_actions.addWidget(self.clear_history_button)
+        history_actions.addWidget(self.export_history_button)
+        history_actions.addStretch()
+        history_layout.addLayout(history_actions)
+        self.history_status_label = QLabel("")
+        self.history_status_label.setStyleSheet(self._settings_status_default_style)
+        history_layout.addWidget(self.history_status_label)
+        layout.addWidget(history_group)
+        self.refresh_history_button.clicked.connect(self._refresh_history)
+        self.history_search_edit.returnPressed.connect(self._refresh_history)
+        self.copy_history_button.clicked.connect(self._copy_history_selection)
+        self.delete_history_button.clicked.connect(self._delete_history_selection)
+        self.clear_history_button.clicked.connect(self._clear_history)
+        self.export_history_button.clicked.connect(self._export_history)
+        self._refresh_history()
+
+        # Startup preferences
+        startup_group = QGroupBox("Startup")
+        startup_layout = QVBoxLayout(startup_group)
+        self.show_window_checkbox = QCheckBox("Show dashboard window on startup")
+        self.show_window_checkbox.setChecked(bool(self.config.get("ui", {}).get("show_main_window", True)))
+        splash_cfg = self.config.get("ui", {}).get("startup_splash", {})
+        self.show_splash_checkbox = QCheckBox("Show native splash on startup")
+        self.show_splash_checkbox.setChecked(bool(splash_cfg.get("enabled", True)))
+        self.show_terminal_animation_checkbox = QCheckBox("Show terminal cow animation on startup")
+        self.show_terminal_animation_checkbox.setChecked(
+            bool(self.config.get("app", {}).get("startup_animation", True))
+        )
+        startup_layout.addWidget(self.show_window_checkbox)
+        startup_layout.addWidget(self.show_splash_checkbox)
+        startup_layout.addWidget(self.show_terminal_animation_checkbox)
+        self.startup_status_label = QLabel("")
+        self.startup_status_label.setStyleSheet(self._settings_status_default_style)
+        startup_layout.addWidget(self.startup_status_label)
+        layout.addWidget(startup_group)
+
+        self.show_window_checkbox.stateChanged.connect(self._toggle_show_window_on_startup)
+        self.show_splash_checkbox.stateChanged.connect(self._toggle_splash_on_startup)
+        self.show_terminal_animation_checkbox.stateChanged.connect(self._toggle_terminal_animation_on_startup)
+
+        # Advanced
+        advanced_group = QGroupBox("Advanced")
+        advanced_layout = QVBoxLayout(advanced_group)
+        self.paths_label = QLabel(self._paths_text())
+        self.paths_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.paths_label.setStyleSheet(self._settings_status_default_style)
+        advanced_layout.addWidget(self.paths_label)
+        advanced_actions = QHBoxLayout()
+        self.run_doctor_button = QPushButton("Run Doctor")
+        self.reset_defaults_button = QPushButton("Reset Defaults")
+        advanced_actions.addWidget(self.run_doctor_button)
+        advanced_actions.addWidget(self.reset_defaults_button)
+        advanced_actions.addStretch()
+        advanced_layout.addLayout(advanced_actions)
+        self.doctor_output = QTextEdit()
+        self.doctor_output.setReadOnly(True)
+        self.doctor_output.setMinimumHeight(150)
+        advanced_layout.addWidget(self.doctor_output)
+        layout.addWidget(advanced_group)
+        self.run_doctor_button.clicked.connect(self._run_doctor)
+        self.reset_defaults_button.clicked.connect(self._reset_defaults)
 
         layout.addStretch()
+
+    def _refresh_audio_inputs(self):
+        """Reload the list of available audio inputs."""
+        self.device_combo.clear()
+        self.device_combo.addItem("System Default", "")
+
+        if not self._audio_inputs_ready:
+            self.device_status_label.setText("Audio input switching unavailable.")
+            self.device_combo.setEnabled(False)
+            self.refresh_devices_button.setEnabled(False)
+            self.apply_device_button.setEnabled(False)
+            return
+
+        try:
+            devices = self.get_audio_inputs() or []
+        except Exception as exc:
+            self.device_status_label.setText(f"Could not load inputs: {exc}")
+            return
+
+        current = str(self.config.get("audio", {}).get("device_name", "") or "").strip()
+        selected_index = 0
+
+        for offset, device in enumerate(devices, start=1):
+            label = str(device.get("name", "Unknown Input"))
+            if device.get("is_default"):
+                label += " (Default)"
+            channels = int(device.get("channels", 0))
+            if channels:
+                label += f" [{channels}ch]"
+            name = str(device.get("name", "") or "").strip()
+            self.device_combo.addItem(label, name)
+            if name == current:
+                selected_index = offset
+
+        self.device_combo.setCurrentIndex(selected_index)
+        self.device_status_label.setText(
+            f"{len(devices)} input device(s) available. Current: {current or 'System Default'}"
+        )
+        if self.menu_bar_indicator:
+            self.menu_bar_indicator.refresh_audio_inputs_menu()
+
+    def get_audio_input_options(self):
+        """Return audio inputs for UI surfaces like the tray menu."""
+        if not self.get_audio_inputs:
+            return []
+        return self.get_audio_inputs() or []
+
+    def get_current_audio_input_name(self) -> str:
+        """Return the configured current input name, or empty for system default."""
+        return str(self.config.get("audio", {}).get("device_name", "") or "").strip()
+
+    def switch_audio_input(self, selected: str) -> tuple[bool, str]:
+        """Switch input device and refresh all UI affordances."""
+        if not self._audio_inputs_ready:
+            message = "Audio input switching unavailable."
+            self.device_status_label.setText(message)
+            return False, message
+
+        selected_name = str(selected or "").strip()
+        ok, message = self.set_audio_input(selected_name)
+        self.device_status_label.setText(message)
+        if ok:
+            self.config.setdefault("audio", {})["device_name"] = selected_name
+            self._refresh_audio_inputs()
+        return ok, message
+
+    def _apply_selected_audio_input(self):
+        """Switch the active audio input to the selected device."""
+        selected = str(self.device_combo.currentData() or "").strip()
+        self.switch_audio_input(selected)
+
+    def _model_options(self) -> dict:
+        if self.get_model_options:
+            try:
+                return self.get_model_options() or {}
+            except Exception:
+                return {}
+        return {}
+
+    def _set_combo_data(self, combo: QComboBox, value):
+        index = combo.findData(value)
+        if index < 0:
+            index = combo.findText(str(value))
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _model_combo(self, option_key: str, current_value: str) -> QComboBox:
+        combo = QComboBox()
+        current = str(current_value or "").strip()
+        seen = set()
+        for option in self._model_options().get(option_key, []):
+            value = str(option.get("value", "")).strip()
+            if not value:
+                continue
+            seen.add(value)
+            label = option.get("label") or value
+            combo.addItem(label, value)
+        if current and current not in seen:
+            combo.addItem(current, current)
+        self._set_combo_data(combo, current)
+        return combo
+
+    def _apply_hotkey_settings(self):
+        updates = {
+            "ptt.hotkey": self.ptt_hotkey_edit.text().strip(),
+            "ptt.secondary_hotkey": self.ptt_secondary_hotkey_edit.text().strip(),
+            "window_management.command_hotkey": self.command_hotkey_edit.text().strip(),
+            "window_management.hotkey_prefix": self.window_prefix_hotkey_edit.text().strip(),
+        }
+        if not self.set_hotkey_settings:
+            self._set_settings_status(self.hotkey_status_label, "Hotkey updates unavailable.", ok=False)
+            return
+        ok, message = self.set_hotkey_settings(updates)
+        if ok:
+            self.config.setdefault("ptt", {})["hotkey"] = updates["ptt.hotkey"]
+            self.config.setdefault("ptt", {})["secondary_hotkey"] = updates["ptt.secondary_hotkey"]
+            self.config.setdefault("window_management", {})["command_hotkey"] = updates[
+                "window_management.command_hotkey"
+            ]
+            self.config.setdefault("window_management", {})["hotkey_prefix"] = updates[
+                "window_management.hotkey_prefix"
+            ]
+        self._set_settings_status(self.hotkey_status_label, message, ok=ok)
+
+    def _apply_dictation_settings(self):
+        updates = {
+            "transcription.final_pass": self.final_pass_combo.currentData(),
+            "transcription.output_format": self.output_format_combo.currentData(),
+            "transcription.auto_paste": self.auto_paste_checkbox.isChecked(),
+            "transcription.use_custom_dictionary": self.use_dictionary_checkbox.isChecked(),
+            "noise_suppression.enabled": self.noise_suppression_checkbox.isChecked(),
+            "history.enabled": self.history_enabled_checkbox.isChecked(),
+        }
+        callback = self.set_general_settings or self.set_transcription_settings
+        if not callback:
+            self._set_settings_status(self.dictation_status_label, "Dictation updates unavailable.", ok=False)
+            return
+        ok, message = callback(updates)
+        if ok:
+            self.config.setdefault("transcription", {})["final_pass"] = updates["transcription.final_pass"]
+            self.config.setdefault("transcription", {})["output_format"] = updates["transcription.output_format"]
+            self.config.setdefault("transcription", {})["auto_paste"] = updates["transcription.auto_paste"]
+            self.config.setdefault("transcription", {})["use_custom_dictionary"] = updates[
+                "transcription.use_custom_dictionary"
+            ]
+            self.config.setdefault("noise_suppression", {})["enabled"] = updates["noise_suppression.enabled"]
+            self.config.setdefault("history", {})["enabled"] = updates["history.enabled"]
+        self._set_settings_status(self.dictation_status_label, message, ok=ok)
+
+    def _apply_model_settings(self):
+        priority = [
+            part.strip()
+            for part in self.provider_priority_edit.text().split(",")
+            if part.strip()
+        ]
+        updates = {
+            "transcription.provider": self.provider_combo.currentData(),
+            "transcription.model": self.whisper_model_combo.currentData(),
+            "transcription.whisper_fallback_model": self.whisper_fallback_combo.currentData(),
+            "deepgram.model": self.deepgram_model_combo.currentData(),
+            "deepgram.prerecorded_model": self.deepgram_prerecorded_model_combo.currentData(),
+            "openai.model": self.openai_model_combo.currentData(),
+            "transcription.final_pass_provider_priority": priority,
+        }
+        if not self.set_transcription_settings:
+            self._set_settings_status(self.model_status_label, "Model updates unavailable.", ok=False)
+            return
+        ok, message = self.set_transcription_settings(updates)
+        if ok:
+            self.config.setdefault("transcription", {})["provider"] = updates["transcription.provider"]
+            self.config.setdefault("transcription", {})["model"] = updates["transcription.model"]
+            self.config.setdefault("transcription", {})["whisper_fallback_model"] = updates[
+                "transcription.whisper_fallback_model"
+            ]
+            self.config.setdefault("transcription", {})["final_pass_provider_priority"] = updates[
+                "transcription.final_pass_provider_priority"
+            ]
+            self.config.setdefault("deepgram", {})["model"] = updates["deepgram.model"]
+            self.config.setdefault("deepgram", {})["prerecorded_model"] = updates["deepgram.prerecorded_model"]
+            self.config.setdefault("openai", {})["model"] = updates["openai.model"]
+        self._set_settings_status(self.model_status_label, message, ok=ok)
+        self._refresh_secret_status()
+
+    def _save_api_keys(self):
+        if not self.set_api_key:
+            self._set_settings_status(self.model_status_label, "API key storage unavailable.", ok=False)
+            return
+
+        messages = []
+        ok_all = True
+        openai_key = self.openai_key_edit.text().strip()
+        deepgram_key = self.deepgram_key_edit.text().strip()
+        if openai_key:
+            ok, message = self.set_api_key("openai", openai_key)
+            ok_all = ok_all and ok
+            messages.append(message)
+        if deepgram_key:
+            ok, message = self.set_api_key("deepgram", deepgram_key)
+            ok_all = ok_all and ok
+            messages.append(message)
+        if not messages:
+            messages.append("Paste a key before saving.")
+            ok_all = False
+        self.openai_key_edit.clear()
+        self.deepgram_key_edit.clear()
+        self._set_settings_status(self.model_status_label, " ".join(messages), ok=ok_all)
+        self._refresh_secret_status()
+
+    def _refresh_secret_status(self):
+        if not self.get_secret_statuses or not hasattr(self, "model_status_label"):
+            return
+        try:
+            statuses = self.get_secret_statuses() or {}
+        except Exception:
+            return
+        parts = []
+        for provider in ("openai", "deepgram"):
+            status = statuses.get(provider, {})
+            source = status.get("source", "missing")
+            env_name = status.get("env_name", "")
+            parts.append(f"{provider.title()}: {source} ({env_name})")
+        self.model_status_label.setText(" • ".join(parts))
+        self.model_status_label.setStyleSheet(self._settings_status_default_style)
+
+    def _apply_cleanup_settings(self):
+        updates = {
+            "post_processing.mode": self.post_processing_mode_combo.currentData(),
+            "post_processing.openai_enabled": self.openai_cleanup_checkbox.isChecked(),
+            "post_processing.openai_model": self.cleanup_model_combo.currentData(),
+        }
+        callback = self.set_general_settings or self.set_transcription_settings
+        if not callback:
+            self._set_settings_status(self.cleanup_status_label, "Cleanup updates unavailable.", ok=False)
+            return
+        ok, message = callback(updates)
+        if ok:
+            pp_cfg = self.config.setdefault("post_processing", {})
+            pp_cfg["mode"] = updates["post_processing.mode"]
+            pp_cfg["openai_enabled"] = updates["post_processing.openai_enabled"]
+            pp_cfg["openai_model"] = updates["post_processing.openai_model"]
+        self._set_settings_status(self.cleanup_status_label, message, ok=ok)
+
+    def _set_settings_status(self, label: QLabel, message: str, ok: bool = True):
+        label.setText(message)
+        label.setStyleSheet(self._settings_ok_style if ok else self._settings_error_style)
+
+    def _update_threshold_preview(self, value: int):
+        threshold = max(0.0, min(1.0, value / 100.0))
+        percent = int((1.0 - threshold) * 100)
+        self.voice_threshold_value.setText(f"{threshold:.2f} ({percent}% permissive)")
+
+    def _refresh_voice_controls(self):
+        if not self.get_voice_profile_status:
+            self.voice_mode_combo.setEnabled(False)
+            self.apply_voice_mode_button.setEnabled(False)
+            self.voice_threshold_slider.setEnabled(False)
+            self.apply_voice_threshold_button.setEnabled(False)
+            self.capture_sample_button.setEnabled(False)
+            self.clear_profile_button.setEnabled(False)
+            self.voice_profile_label.setText("Profile: unavailable")
+            self.voice_settings_status_label.setText("Voice settings unavailable.")
+            self.voice_settings_status_label.setStyleSheet(self._settings_error_style)
+            return
+
+        try:
+            status = self.get_voice_profile_status() or {}
+        except Exception as exc:
+            self.voice_profile_label.setText("Profile: error")
+            self._set_settings_status(
+                self.voice_settings_status_label,
+                f"Could not load voice settings: {exc}",
+                ok=False,
+            )
+            return
+
+        mode = str(status.get("mode", "whisper"))
+        mode_index = self.voice_mode_combo.findData(mode)
+        if mode_index >= 0:
+            with QSignalBlocker(self.voice_mode_combo):
+                self.voice_mode_combo.setCurrentIndex(mode_index)
+
+        threshold = float(status.get("threshold", 0.6))
+        slider_value = int(max(30, min(95, round(threshold * 100))))
+        with QSignalBlocker(self.voice_threshold_slider):
+            self.voice_threshold_slider.setValue(slider_value)
+        self._update_threshold_preview(slider_value)
+
+        enrolled = int(status.get("enrolled_samples", 0))
+        minimum = int(status.get("min_samples", 0))
+        ready = bool(status.get("is_enrolled", False))
+        profile_path = str(status.get("profile_path", "") or "")
+        ready_text = "ready" if ready else "incomplete"
+        self.voice_profile_label.setText(
+            f"Profile: {enrolled}/{minimum} samples ({ready_text}) • {profile_path}"
+        )
+
+    def _apply_voice_mode(self):
+        if not self.set_voice_mode:
+            self._set_settings_status(
+                self.voice_settings_status_label, "Mode update is unavailable.", ok=False
+            )
+            return
+        selected_mode = str(self.voice_mode_combo.currentData() or "").strip()
+        ok, message = self.set_voice_mode(selected_mode)
+        if ok:
+            self.config.setdefault("voice_fingerprint", {})["mode"] = selected_mode
+            self._refresh_voice_controls()
+        self._set_settings_status(self.voice_settings_status_label, message, ok=ok)
+
+    def _apply_voice_threshold(self):
+        if not self.set_voice_threshold:
+            self._set_settings_status(
+                self.voice_settings_status_label, "Threshold update is unavailable.", ok=False
+            )
+            return
+        threshold = self.voice_threshold_slider.value() / 100.0
+        ok, message = self.set_voice_threshold(threshold)
+        if ok:
+            self.config.setdefault("voice_fingerprint", {})["threshold"] = threshold
+            self._refresh_voice_controls()
+        self._set_settings_status(self.voice_settings_status_label, message, ok=ok)
+
+    def _capture_voice_sample(self):
+        if not self.capture_enrollment_sample:
+            self._set_settings_status(
+                self.voice_settings_status_label, "Enrollment capture is unavailable.", ok=False
+            )
+            return
+        self.capture_sample_button.setEnabled(False)
+        self._set_settings_status(self.voice_settings_status_label, "Recording sample...", ok=True)
+        QApplication.processEvents()
+        ok, message = self.capture_enrollment_sample(3.0)
+        self.capture_sample_button.setEnabled(True)
+        self._set_settings_status(self.voice_settings_status_label, message, ok=ok)
+        self._refresh_voice_controls()
+
+    def _clear_voice_profile(self):
+        if not self.clear_voice_profile:
+            self._set_settings_status(
+                self.voice_settings_status_label, "Profile reset is unavailable.", ok=False
+            )
+            return
+
+        confirmed = QMessageBox.question(
+            self,
+            "Reset Voice Profile",
+            "Delete all enrolled voice samples? You will need to re-enroll before using whisper mode.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+
+        ok, message = self.clear_voice_profile()
+        self._set_settings_status(self.voice_settings_status_label, message, ok=ok)
+        self._refresh_voice_controls()
+
+    def _refresh_dictionary_path(self):
+        path = str(self.config.get("transcription", {}).get("personal_dictionary_path", "") or "").strip()
+        if self.get_personal_dictionary_path:
+            try:
+                path = self.get_personal_dictionary_path()
+            except Exception:
+                pass
+        self.dictionary_path_label.setText(f"Path: {path or '(not configured)'}")
+
+    def _initialize_dictionary(self):
+        if not self.ensure_personal_dictionary_exists:
+            self._set_settings_status(
+                self.dictionary_status_label, "Dictionary initialization unavailable.", ok=False
+            )
+            return
+        ok, message = self.ensure_personal_dictionary_exists()
+        self._set_settings_status(self.dictionary_status_label, message, ok=ok)
+        self._refresh_dictionary_path()
+
+    def _open_dictionary(self):
+        if not self.open_personal_dictionary:
+            self._set_settings_status(
+                self.dictionary_status_label, "Dictionary open action unavailable.", ok=False
+            )
+            return
+        ok, message = self.open_personal_dictionary()
+        self._set_settings_status(self.dictionary_status_label, message, ok=ok)
+        self._refresh_dictionary_path()
+
+    def _reload_dictionary(self):
+        if not self.reload_personal_dictionary:
+            self._set_settings_status(
+                self.dictionary_status_label, "Dictionary reload action unavailable.", ok=False
+            )
+            return
+        ok, message = self.reload_personal_dictionary()
+        self._set_settings_status(self.dictionary_status_label, message, ok=ok)
+        self._refresh_voice_controls()
+
+    def _load_dictionary_editor(self):
+        if not hasattr(self, "dictionary_terms_edit"):
+            return
+        if not self.get_personal_dictionary_payload:
+            self.dictionary_terms_edit.setPlainText("")
+            self.dictionary_corrections_edit.setPlainText("")
+            return
+        try:
+            payload = self.get_personal_dictionary_payload() or {}
+            terms = payload.get("preferred_terms", [])
+            corrections = payload.get("corrections", [])
+            self.dictionary_terms_edit.setPlainText("\n".join(str(term) for term in terms))
+            self.dictionary_corrections_edit.setPlainText(
+                yaml.safe_dump(corrections, sort_keys=False, allow_unicode=False)
+            )
+        except Exception as exc:
+            self._set_settings_status(self.dictionary_status_label, f"Could not load dictionary: {exc}", ok=False)
+
+    def _save_dictionary_editor(self):
+        if not self.save_personal_dictionary_payload:
+            self._set_settings_status(self.dictionary_status_label, "Dictionary save unavailable.", ok=False)
+            return
+        terms = [
+            line.strip()
+            for line in self.dictionary_terms_edit.toPlainText().splitlines()
+            if line.strip()
+        ]
+        try:
+            raw = yaml.safe_load(self.dictionary_corrections_edit.toPlainText() or "[]")
+            if isinstance(raw, dict):
+                corrections = raw.get("corrections", [])
+            else:
+                corrections = raw or []
+            if not isinstance(corrections, list):
+                raise ValueError("corrections must be a YAML list")
+        except Exception as exc:
+            self._set_settings_status(self.dictionary_status_label, f"Invalid corrections YAML: {exc}", ok=False)
+            return
+
+        ok, message = self.save_personal_dictionary_payload(terms, corrections)
+        self._set_settings_status(self.dictionary_status_label, message, ok=ok)
+        if ok:
+            self._load_dictionary_editor()
+
+    def _refresh_history(self):
+        if not hasattr(self, "history_table"):
+            return
+        self.history_table.setRowCount(0)
+        if not self.get_history_records:
+            self._set_settings_status(self.history_status_label, "History unavailable.", ok=False)
+            return
+        query = self.history_search_edit.text().strip()
+        try:
+            records = self.get_history_records(query, 100) or []
+        except Exception as exc:
+            self._set_settings_status(self.history_status_label, f"Could not load history: {exc}", ok=False)
+            return
+        self.history_table.setRowCount(len(records))
+        for row_idx, record in enumerate(records):
+            target = record.get("target_app", "")
+            if record.get("target_window"):
+                target = f"{target} - {record.get('target_window')}" if target else record.get("target_window")
+            values = [
+                record.get("created_at", ""),
+                record.get("mode", ""),
+                record.get("provider", ""),
+                target,
+                record.get("text", ""),
+            ]
+            for col_idx, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                item.setData(Qt.ItemDataRole.UserRole, record.get("id"))
+                if col_idx == 4:
+                    item.setToolTip(
+                        "Original: " + str(record.get("original_text", ""))
+                        if record.get("original_text") != record.get("text")
+                        else str(record.get("text", ""))
+                    )
+                self.history_table.setItem(row_idx, col_idx, item)
+        self._set_settings_status(self.history_status_label, f"Loaded {len(records)} history item(s).", ok=True)
+
+    def _selected_history_id(self):
+        rows = self.history_table.selectionModel().selectedRows() if self.history_table.selectionModel() else []
+        if not rows:
+            return None
+        item = self.history_table.item(rows[0].row(), 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _copy_history_selection(self):
+        rows = self.history_table.selectionModel().selectedRows() if self.history_table.selectionModel() else []
+        if not rows:
+            self._set_settings_status(self.history_status_label, "Select a history row first.", ok=False)
+            return
+        text_item = self.history_table.item(rows[0].row(), 4)
+        if text_item:
+            QApplication.clipboard().setText(text_item.text())
+            self._set_settings_status(self.history_status_label, "Copied history text.", ok=True)
+
+    def _delete_history_selection(self):
+        record_id = self._selected_history_id()
+        if record_id is None:
+            self._set_settings_status(self.history_status_label, "Select a history row first.", ok=False)
+            return
+        if not self.delete_history_record:
+            self._set_settings_status(self.history_status_label, "History delete unavailable.", ok=False)
+            return
+        ok, message = self.delete_history_record(int(record_id))
+        self._set_settings_status(self.history_status_label, message, ok=ok)
+        self._refresh_history()
+
+    def _clear_history(self):
+        if not self.clear_history:
+            self._set_settings_status(self.history_status_label, "History clear unavailable.", ok=False)
+            return
+        confirmed = QMessageBox.question(
+            self,
+            "Clear History",
+            "Delete all local transcript history?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+        ok, message = self.clear_history()
+        self._set_settings_status(self.history_status_label, message, ok=ok)
+        self._refresh_history()
+
+    def _export_history(self):
+        if not self.export_history:
+            self._set_settings_status(self.history_status_label, "History export unavailable.", ok=False)
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export History",
+            "bloviate-history.csv",
+            "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        ok, message = self.export_history(path)
+        self._set_settings_status(self.history_status_label, message, ok=ok)
+
+    def _paths_text(self) -> str:
+        config_path = str(self.config.get("__config_path__", ""))
+        config_dir = str(self.config.get("__config_dir__", ""))
+        dictionary = str(self.config.get("transcription", {}).get("personal_dictionary_path", "personal_dictionary.yaml"))
+        return f"Config: {config_path}\nData directory: {config_dir}\nDictionary: {dictionary}"
+
+    def _run_doctor(self):
+        if not self.run_doctor_text:
+            self.doctor_output.setPlainText("Doctor unavailable.")
+            return
+        ok, text = self.run_doctor_text()
+        self.doctor_output.setPlainText(text)
+        if ok:
+            self.doctor_output.setStyleSheet("color: #DADADA;")
+        else:
+            self.doctor_output.setStyleSheet("color: #FFCDD2;")
+
+    def _reset_defaults(self):
+        if not self.reset_settings_to_defaults:
+            self.doctor_output.setPlainText("Reset unavailable.")
+            return
+        confirmed = QMessageBox.question(
+            self,
+            "Reset Settings",
+            "Reset Bloviate settings to packaged defaults? API keys and history are not deleted.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+        ok, message = self.reset_settings_to_defaults()
+        self.doctor_output.setPlainText(message)
+        self.doctor_output.setStyleSheet("color: #DADADA;" if ok else "color: #FFCDD2;")
+
+    def _toggle_show_window_on_startup(self, state: int):
+        enabled = state == Qt.CheckState.Checked.value
+        self.config.setdefault("ui", {})["show_main_window"] = enabled
+        if not self.set_show_main_window_on_startup:
+            self._set_settings_status(
+                self.startup_status_label,
+                "Startup window preference is local-only this session.",
+                ok=False,
+            )
+            return
+        ok, message = self.set_show_main_window_on_startup(enabled)
+        self._set_settings_status(self.startup_status_label, message, ok=ok)
+
+    def _toggle_splash_on_startup(self, state: int):
+        enabled = state == Qt.CheckState.Checked.value
+        self.config.setdefault("ui", {}).setdefault("startup_splash", {})["enabled"] = enabled
+        if not self.set_startup_splash_enabled:
+            self._set_settings_status(
+                self.startup_status_label,
+                "Splash preference is local-only this session.",
+                ok=False,
+            )
+            return
+        ok, message = self.set_startup_splash_enabled(enabled)
+        self._set_settings_status(self.startup_status_label, message, ok=ok)
+
+    def _toggle_terminal_animation_on_startup(self, state: int):
+        enabled = state == Qt.CheckState.Checked.value
+        self.config.setdefault("app", {})["startup_animation"] = enabled
+        if not self.set_terminal_startup_animation_enabled:
+            self._set_settings_status(
+                self.startup_status_label,
+                "Terminal animation preference is local-only this session.",
+                ok=False,
+            )
+            return
+        ok, message = self.set_terminal_startup_animation_enabled(enabled)
+        self._set_settings_status(self.startup_status_label, message, ok=ok)
+
+    def show_settings_tab(self):
+        """Bring the settings tab into focus."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if hasattr(self, "tabs"):
+            self.tabs.setCurrentWidget(self.settings_tab)
+        self._refresh_voice_controls()
+        self._refresh_dictionary_path()
+
+    def request_quit(self):
+        """Mark the window as closing and quit the app."""
+        self._closing = True
+        QApplication.instance().quit()
 
     def set_dark_theme(self):
         """Apply dark theme to the application."""
@@ -872,6 +2029,11 @@ class BloviateUI(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close event."""
+        if not self._closing and self.menu_bar_indicator and not self.menu_bar_indicator._closed:
+            self.hide()
+            self.status_label.setText("Running in menu bar. Use tray icon to reopen settings.")
+            event.ignore()
+            return
         if self._closing:
             super().closeEvent(event)
             return
@@ -884,7 +2046,194 @@ class BloviateUI(QMainWindow):
         super().closeEvent(event)
 
 
-def create_ui(config: dict) -> tuple[QApplication, BloviateUI]:
+class StartupSplash(QWidget):
+    """Simple native startup splash shown while Bloviate boots."""
+
+    def __init__(self, config: dict, parent=None):
+        super().__init__(parent)
+        self.config = config
+        splash_cfg = config.get("ui", {}).get("startup_splash", {})
+        self.duration_ms = int(splash_cfg.get("duration_ms", 1400))
+        self._fade_ms = int(splash_cfg.get("fade_out_ms", 220))
+        self._animation = None
+        self._closed = False
+        self._objc = None
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Window
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.resize(420, 190)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+
+        card = QFrame()
+        card.setObjectName("splashCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(20, 18, 20, 18)
+        card_layout.setSpacing(8)
+
+        title = QLabel("BLOVIATE")
+        title.setObjectName("splashTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        subtitle = QLabel("Voice dictation, tuned for humans.")
+        subtitle.setObjectName("splashSubtitle")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        status = QLabel("Starting audio, voice profile, and hotkeys...")
+        status.setObjectName("splashStatus")
+        status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        card_layout.addWidget(title)
+        card_layout.addWidget(subtitle)
+        card_layout.addSpacing(6)
+        card_layout.addWidget(status)
+        root.addWidget(card)
+
+        self.setStyleSheet(
+            """
+            QFrame#splashCard {
+                background-color: rgba(24, 24, 24, 238);
+                border: 1px solid rgba(130, 130, 130, 80);
+                border-radius: 16px;
+            }
+            QLabel#splashTitle {
+                color: #F0F0F0;
+                font-size: 28px;
+                font-weight: 800;
+                letter-spacing: 2px;
+            }
+            QLabel#splashSubtitle {
+                color: #CFCFCF;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            QLabel#splashStatus {
+                color: #9FD7B2;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            """
+        )
+
+    def _get_objc(self):
+        """Lazily load Objective-C runtime handles (macOS only)."""
+        if self._objc is not None:
+            return self._objc
+        if sys.platform != 'darwin':
+            return None
+        try:
+            import ctypes
+            import ctypes.util
+            lib = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc'))
+            lib.sel_registerName.restype = ctypes.c_void_p
+            lib.sel_registerName.argtypes = [ctypes.c_char_p]
+            self._objc = (lib, ctypes)
+            return self._objc
+        except Exception:
+            return None
+
+    def _get_ns_window(self):
+        pair = self._get_objc()
+        if pair is None:
+            return None
+        lib, ctypes = pair
+        msg = lib.objc_msgSend
+        msg.restype = ctypes.c_void_p
+        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        return msg(int(self.winId()), lib.sel_registerName(b'window')) or None
+
+    def _force_front_macos(self):
+        """Force splash to front on macOS even when launched from Terminal."""
+        pair = self._get_objc()
+        if pair is None:
+            return
+        lib, ctypes = pair
+        ns_window = self._get_ns_window()
+        if not ns_window:
+            return
+        try:
+            msg = lib.objc_msgSend
+            sel = lib.sel_registerName
+            msg.restype = None
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+            msg(ns_window, sel(b'setLevel:'), 25)  # NSStatusWindowLevel
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            msg(ns_window, sel(b'orderFrontRegardless'))
+        except Exception:
+            return
+
+    def _center_on_screen(self):
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return
+        geo = screen.availableGeometry()
+        x = geo.x() + int((geo.width() - self.width()) / 2)
+        y = geo.y() + int((geo.height() - self.height()) / 2)
+        self.move(x, y)
+
+    def start(self):
+        self._center_on_screen()
+        self.setWindowOpacity(1.0)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        QApplication.processEvents()
+        self._force_front_macos()
+        QTimer.singleShot(max(100, self.duration_ms), self.fade_out)
+
+    def fade_out(self):
+        if self._closed:
+            return
+        self._animation = QPropertyAnimation(self, b"windowOpacity")
+        self._animation.setDuration(max(100, self._fade_ms))
+        self._animation.setStartValue(1.0)
+        self._animation.setEndValue(0.0)
+        self._animation.finished.connect(self.close)
+        self._animation.start()
+
+    def closeEvent(self, event):
+        self._closed = True
+        super().closeEvent(event)
+
+
+def create_ui(
+    config: dict,
+    get_audio_inputs=None,
+    set_audio_input=None,
+    get_voice_profile_status=None,
+    set_voice_mode=None,
+    set_voice_threshold=None,
+    capture_enrollment_sample=None,
+    clear_voice_profile=None,
+    get_personal_dictionary_path=None,
+    ensure_personal_dictionary_exists=None,
+    open_personal_dictionary=None,
+    reload_personal_dictionary=None,
+    get_personal_dictionary_payload=None,
+    save_personal_dictionary_payload=None,
+    get_model_options=None,
+    get_secret_statuses=None,
+    set_api_key=None,
+    set_transcription_settings=None,
+    set_hotkey_settings=None,
+    set_general_settings=None,
+    get_history_records=None,
+    delete_history_record=None,
+    clear_history=None,
+    export_history=None,
+    run_doctor_text=None,
+    reset_settings_to_defaults=None,
+    set_show_main_window_on_startup=None,
+    set_startup_splash_enabled=None,
+    set_terminal_startup_animation_enabled=None,
+) -> tuple[QApplication, BloviateUI]:
     """
     Create and return the UI application and window.
 
@@ -892,7 +2241,45 @@ def create_ui(config: dict) -> tuple[QApplication, BloviateUI]:
         Tuple of (app, window)
     """
     app = QApplication(sys.argv)
-    window = BloviateUI(config)
+    app.setQuitOnLastWindowClosed(False)
+    window = BloviateUI(
+        config,
+        get_audio_inputs=get_audio_inputs,
+        set_audio_input=set_audio_input,
+        get_voice_profile_status=get_voice_profile_status,
+        set_voice_mode=set_voice_mode,
+        set_voice_threshold=set_voice_threshold,
+        capture_enrollment_sample=capture_enrollment_sample,
+        clear_voice_profile=clear_voice_profile,
+        get_personal_dictionary_path=get_personal_dictionary_path,
+        ensure_personal_dictionary_exists=ensure_personal_dictionary_exists,
+        open_personal_dictionary=open_personal_dictionary,
+        reload_personal_dictionary=reload_personal_dictionary,
+        get_personal_dictionary_payload=get_personal_dictionary_payload,
+        save_personal_dictionary_payload=save_personal_dictionary_payload,
+        get_model_options=get_model_options,
+        get_secret_statuses=get_secret_statuses,
+        set_api_key=set_api_key,
+        set_transcription_settings=set_transcription_settings,
+        set_hotkey_settings=set_hotkey_settings,
+        set_general_settings=set_general_settings,
+        get_history_records=get_history_records,
+        delete_history_record=delete_history_record,
+        clear_history=clear_history,
+        export_history=export_history,
+        run_doctor_text=run_doctor_text,
+        reset_settings_to_defaults=reset_settings_to_defaults,
+        set_show_main_window_on_startup=set_show_main_window_on_startup,
+        set_startup_splash_enabled=set_startup_splash_enabled,
+        set_terminal_startup_animation_enabled=set_terminal_startup_animation_enabled,
+    )
+    splash_cfg = config.get("ui", {}).get("startup_splash", {})
+    show_splash = bool(splash_cfg.get("enabled", True))
+    if show_splash:
+        window.startup_splash = StartupSplash(config)
+        # Defer splash show until the event loop starts so macOS actually paints it.
+        QTimer.singleShot(0, window.startup_splash.start)
+
     if config.get("ui", {}).get("show_main_window", True):
         window.show()
     else:

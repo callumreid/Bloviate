@@ -297,3 +297,53 @@ def add_preferred_terms(config: dict, terms: Iterable[str]) -> Tuple[Path, List[
         yaml.safe_dump(payload, f, sort_keys=False, allow_unicode=False)
 
     return path, added
+
+
+def save_personal_dictionary(
+    config: dict,
+    preferred_terms: Iterable[str],
+    corrections: Iterable[dict],
+) -> Path:
+    """Replace the primary personal dictionary with normalized terms/corrections."""
+    path = resolve_personal_dictionary_path(config)
+
+    terms: List[str] = []
+    seen_terms = set()
+    for raw_term in preferred_terms:
+        term = normalize_term(raw_term)
+        if not term:
+            continue
+        key = term.lower()
+        if key in seen_terms:
+            continue
+        seen_terms.add(key)
+        terms.append(term)
+
+    normalized_corrections: List[dict] = []
+    seen_corrections = set()
+    for entry in corrections:
+        if not isinstance(entry, dict):
+            continue
+        normalized = _normalize_correction(entry)
+        if not normalized:
+            continue
+        key = (
+            normalized["phrase"].lower(),
+            tuple(variation.lower() for variation in normalized["variations"]),
+            normalized["match"],
+        )
+        if key in seen_corrections:
+            continue
+        seen_corrections.add(key)
+        normalized_corrections.append(normalized)
+
+    payload = {
+        "preferred_terms": terms,
+        "corrections": normalized_corrections,
+    }
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(payload, f, sort_keys=False, allow_unicode=False)
+
+    return path

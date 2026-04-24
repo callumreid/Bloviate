@@ -6,14 +6,19 @@ Main application entry point.
 """
 
 import argparse
+import contextlib
 import importlib.util
+import io
+import logging
 import os
 import platform
+import subprocess
 import shutil
 import sys
 import threading
 import time
 import re
+import warnings
 import numpy as np
 from pathlib import Path
 from typing import Optional
@@ -55,38 +60,158 @@ from command_vocabulary import (
 from app_paths import (
     config_path as default_user_config_path,
     describe_paths,
-    ensure_default_config,
     models_dir as default_models_dir,
     project_root,
     read_resource_text,
 )
-from personal_dictionary import add_preferred_terms, load_personal_dictionary, resolve_personal_dictionary_path
+from personal_dictionary import (
+    add_preferred_terms,
+    load_personal_dictionary,
+    resolve_personal_dictionary_path,
+    save_personal_dictionary,
+)
+from history_store import HistoryStore
+from model_registry import ModelRegistry
+from post_processor import PostProcessor
+from secret_store import SecretStore
+from settings_service import SettingsService, load_yaml_config, save_config
 
 
 def _load_config(config_path: str, *, allow_missing: bool = False) -> tuple[dict, Path]:
     """Load YAML config relative to the project root."""
-    path = Path(config_path).expanduser()
-    if not path.is_absolute():
-        default_path = default_user_config_path()
-        if path == Path("config.yaml"):
-            path = default_path
-        else:
-            path = Path.cwd() / path
+    return load_yaml_config(config_path, allow_missing=allow_missing)
 
-    if not path.exists():
-        if path == default_user_config_path():
-            path = ensure_default_config()
-        if allow_missing:
-            return {}, path
-        if not path.exists():
-            raise FileNotFoundError(f"Config file not found: {path}")
 
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+def _save_config(config: dict) -> Path:
+    """Persist the current config back to its resolved file."""
+    return save_config(config)
 
-    data["__config_path__"] = str(path)
-    data["__config_dir__"] = str(path.parent)
-    return data, path
+
+def _is_verbose_logging_enabled(config: dict) -> bool:
+    app_cfg = config.get("app", {})
+    return bool(app_cfg.get("verbose_logs", False))
+
+
+def _configure_runtime_output(config: dict):
+    """Reduce third-party startup noise for end-user runs."""
+    app_cfg = config.get("app", {})
+    verbose_logs = bool(app_cfg.get("verbose_logs", False))
+    suppress_third_party = bool(app_cfg.get("suppress_third_party_warnings", True))
+
+    if verbose_logs or not suppress_third_party:
+        return
+
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*pkg_resources is deprecated as an API.*",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*torch\.cuda\.amp\.custom_fwd\(args\.\.\.\) is deprecated.*",
+        category=FutureWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*You are using `torch\.load` with `weights_only=False`.*",
+        category=FutureWarning,
+    )
+
+    for logger_name in ("speechbrain", "torchaudio", "torch", "matplotlib"):
+        logging.getLogger(logger_name).setLevel(logging.ERROR)
+
+
+@contextlib.contextmanager
+def _suppress_startup_stdio(enabled: bool):
+    """Optionally silence noisy third-party stdout/stderr during startup."""
+    if not enabled:
+        yield
+        return
+
+    devnull = io.StringIO()
+    with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+        yield
+
+
+def _show_startup_animation(config: dict):
+    """Render a short ASCII startup animation for interactive sessions."""
+    app_cfg = config.get("app", {})
+    if not bool(app_cfg.get("startup_animation", True)):
+        return
+    if not sys.stdout.isatty():
+        return
+
+    # Alternating leg/tail poses so the cow "runs" across the terminal.
+    cow_frames = [
+        [
+            r"      (__)",
+            r"      (oo)",
+            r" /-----\/ ",
+            r"/ |   ||  ",
+            r"*  /\-\/\ ",
+            r"   ~~  ~~ ",
+        ],
+        [
+            r"      (__)",
+            r"      (oo)",
+            r" /-----\/ ",
+            r"/ |   ||  ",
+            r"*  /\/\-\ ",
+            r"   ~~  ~~ ",
+        ],
+    ]
+    moo_frames = ["Moo", "Mooo", "MOO", "moo"]
+
+    loops = max(1, int(app_cfg.get("startup_animation_loops", 1)))
+    frame_delay_s = float(app_cfg.get("startup_animation_frame_delay_s", 0.04))
+    step = max(1, int(app_cfg.get("startup_animation_step", 2)))
+    columns = max(40, shutil.get_terminal_size(fallback=(80, 20)).columns)
+    cow_width = max(len(line) for frame in cow_frames for line in frame)
+
+    def _place(text: str, x: int, width: int) -> str:
+        if x < 0:
+            offset = -x
+            if offset >= len(text):
+                return ""
+            return text[offset:][:width]
+        if x >= width:
+            return ""
+        return ((" " * x) + text)[:width]
+
+    hide_cursor = "\033[?25l"
+    show_cursor = "\033[?25h"
+    clear = "\033[2J"
+    home = "\033[H"
+
+    try:
+        sys.stdout.write(hide_cursor + clear)
+        sys.stdout.flush()
+        for loop_idx in range(loops):
+            frame_idx = 0
+            for x in range(-cow_width - 8, columns + 2, step):
+                cow = cow_frames[frame_idx % len(cow_frames)]
+                moo = f"< {moo_frames[frame_idx % len(moo_frames)]} >"
+                bubble_x = x - len(moo) - 2
+                lines = [
+                    _place(moo, bubble_x, columns),
+                    _place(r" " + ("_" * max(0, len(moo) - 2)), bubble_x + 1, columns),
+                ]
+                for line in cow:
+                    lines.append(_place(line, x, columns))
+                lines.append("=" * columns)
+                lines.append(_place("Bloviate warming up...", max(0, columns - 26), columns))
+
+                sys.stdout.write(home + "\n".join(lines) + "\n")
+                sys.stdout.flush()
+                time.sleep(frame_delay_s)
+                frame_idx += 1
+            if loop_idx < loops - 1:
+                time.sleep(frame_delay_s * 2)
+        sys.stdout.write(clear + home)
+        sys.stdout.flush()
+    finally:
+        sys.stdout.write(show_cursor)
+        sys.stdout.flush()
 
 
 def _module_available(name: str) -> bool:
@@ -299,16 +424,20 @@ def run_doctor(config_path: str) -> int:
     deepgram_env = str(config.get("deepgram", {}).get("api_key_env", "DEEPGRAM_API_KEY"))
     openai_env = str(config.get("openai", {}).get("api_key_env", "OPENAI_API_KEY"))
 
+    secret_store = SecretStore()
+
     if "deepgram" in providers:
-        if os.getenv(deepgram_env):
-            _doctor_line("OK", "Deepgram", f"API key found in {deepgram_env}")
+        deepgram_status = secret_store.status("deepgram", config)
+        if deepgram_status.source != "missing":
+            _doctor_line("OK", "Deepgram", f"API key found via {deepgram_status.source}")
         else:
             warnings += 1
             _doctor_line("WARN", "Deepgram", f"API key missing ({deepgram_env})")
 
     if "openai" in providers:
-        if os.getenv(openai_env):
-            _doctor_line("OK", "OpenAI", f"API key found in {openai_env}")
+        openai_status = secret_store.status("openai", config)
+        if openai_status.source != "missing":
+            _doctor_line("OK", "OpenAI", f"API key found via {openai_status.source}")
         else:
             warnings += 1
             _doctor_line("WARN", "OpenAI", f"API key missing ({openai_env})")
@@ -409,6 +538,13 @@ class Bloviate:
     def __init__(self, config_path: str = "config.yaml", voice_mode_override: Optional[str] = None):
         # Load configuration
         self.config, _ = _load_config(config_path)
+        self.settings_service = SettingsService(self.config)
+        self.secret_store = SecretStore()
+        self.model_registry = ModelRegistry()
+        self.history_store = HistoryStore()
+        self.post_processor = PostProcessor(self.config, secret_store=self.secret_store)
+        self.verbose_logs = _is_verbose_logging_enabled(self.config)
+        self._quiet_startup = not self.verbose_logs
 
         self.voice_mode = self._resolve_voice_mode(voice_mode_override)
         self.talk_mode = self.voice_mode == "talk"
@@ -422,8 +558,10 @@ class Bloviate:
 
         self.audio_capture = AudioCapture(self.config)
         self.noise_suppressor = NoiseSuppressor(self.config)
-        self.voice_fingerprint = VoiceFingerprint(self.config)
-        self.transcriber = Transcriber(self.config)
+        with _suppress_startup_stdio(self._quiet_startup):
+            self.voice_fingerprint = VoiceFingerprint(self.config)
+        with _suppress_startup_stdio(self._quiet_startup):
+            self.transcriber = Transcriber(self.config)
         self.ptt_handler = PTTHandler(self.config)
 
         # Window management
@@ -445,9 +583,411 @@ class Bloviate:
         self._shutdown_event = threading.Event()
         self._worker_threads = set()
         self._worker_threads_lock = threading.Lock()
+        self._enrollment_lock = threading.Lock()
         self._interim_update_interval_s = float(
             self.config.get("ui", {}).get("interim_update_interval_s", 0.15)
         )
+
+    def list_audio_input_options(self) -> list[dict]:
+        """Return current audio input options for the UI."""
+        return self.audio_capture.list_input_devices()
+
+    def set_audio_input_device(self, device_name: str) -> tuple[bool, str]:
+        """Switch audio input device and persist the selection."""
+        if self.is_recording or self.is_command_recording:
+            return False, "Finish the current recording before switching input devices."
+
+        selected = str(device_name or "").strip()
+        previous = str(self.config.get("audio", {}).get("device_name", "") or "").strip()
+        label = selected or "System Default"
+
+        try:
+            self.audio_capture.set_device(selected)
+            self.config.setdefault("audio", {})["device_name"] = selected
+            saved_path = _save_config(self.config)
+            if self.verbose_logs:
+                print(f"[Audio] Switched input device to {label}")
+                print(f"[Config] Saved audio.device_name to {saved_path}")
+            return True, f"Input device set to {label}"
+        except Exception as exc:
+            print(f"[Audio] Failed to switch input device to {label}: {exc}")
+            try:
+                self.audio_capture.set_device(previous)
+            except Exception as restore_exc:
+                print(f"[Audio] Failed to restore previous input device: {restore_exc}")
+            return False, f"Could not switch input device: {exc}"
+
+    def get_voice_profile_status(self) -> dict:
+        """Return runtime status for voice-mode/profile settings."""
+        enrolled = len(self.voice_fingerprint.enrolled_embeddings)
+        minimum = int(self.voice_fingerprint.min_enrollment_samples)
+        mode = "talk" if self.talk_mode else "whisper"
+        return {
+            "mode": mode,
+            "threshold": float(self.voice_fingerprint.threshold),
+            "enrolled_samples": enrolled,
+            "min_samples": minimum,
+            "is_enrolled": bool(self.voice_fingerprint.is_enrolled()),
+            "profile_path": str(self.voice_fingerprint.profile_path),
+        }
+
+    def set_voice_mode(self, mode: str) -> tuple[bool, str]:
+        """Set whisper/talk mode at runtime and persist config."""
+        resolved = self._resolve_voice_mode(mode)
+        if resolved == "whisper" and not self.voice_fingerprint.is_enrolled():
+            return False, "Whisper mode requires an enrolled voice profile first."
+
+        self.voice_mode = resolved
+        self.talk_mode = resolved == "talk"
+        self.config.setdefault("voice_fingerprint", {})["mode"] = resolved
+        saved_path = _save_config(self.config)
+        if self.verbose_logs:
+            print(f"[Config] Saved voice_fingerprint.mode to {saved_path}")
+
+        if self.ui_window:
+            if self.talk_mode:
+                self.ui_window.signals.update_voice_match.emit(True, -1.0)
+            else:
+                self.ui_window.signals.update_status.emit("Whisper mode enabled")
+
+        label = "Talk mode (verification bypassed)" if self.talk_mode else "Whisper mode (verification enforced)"
+        return True, f"Mode set to {label}"
+
+    def set_voice_threshold(self, threshold: float) -> tuple[bool, str]:
+        """Update speaker-match threshold and persist config/profile."""
+        try:
+            value = float(threshold)
+        except (TypeError, ValueError):
+            return False, "Threshold must be a number between 0.0 and 1.0."
+
+        clamped = max(0.0, min(1.0, value))
+        self.voice_fingerprint.threshold = clamped
+        self.config.setdefault("voice_fingerprint", {})["threshold"] = clamped
+        saved_path = _save_config(self.config)
+        if self.verbose_logs:
+            print(f"[Config] Saved voice_fingerprint.threshold to {saved_path}")
+
+        if self.voice_fingerprint.enrolled_embeddings:
+            self.voice_fingerprint.save_profile()
+        return True, f"Voice threshold set to {clamped:.2f}"
+
+    def capture_enrollment_sample(self, duration_s: float = 3.0) -> tuple[bool, str]:
+        """Capture one sample from live audio and add it to the voice profile."""
+        if self.is_recording or self.is_command_recording:
+            return False, "Finish dictation before recording enrollment samples."
+        if not self.voice_fingerprint.enabled:
+            return False, "Voice fingerprinting is unavailable."
+        if self._shutdown_event.is_set():
+            return False, "App is shutting down."
+        if not self._enrollment_lock.acquire(blocking=False):
+            return False, "Enrollment capture already in progress."
+
+        try:
+            capture_seconds = max(1.0, float(duration_s))
+            self.audio_capture.clear_queue()
+            samples = []
+            deadline = time.time() + capture_seconds
+            while time.time() < deadline:
+                chunk = self.audio_capture.get_audio_chunk(timeout=0.12)
+                if chunk is not None:
+                    samples.append(chunk)
+
+            if not samples:
+                return False, "No audio captured. Check your microphone and try again."
+
+            audio = np.concatenate(samples).flatten()
+            rms = float(np.sqrt(np.mean(audio ** 2)))
+            processed_audio = self.noise_suppressor.process(audio)
+            if not self.voice_fingerprint.enroll_sample(processed_audio):
+                return False, "Could not extract a voice embedding from this sample."
+
+            self.voice_fingerprint.save_profile()
+            enrolled = len(self.voice_fingerprint.enrolled_embeddings)
+            minimum = int(self.voice_fingerprint.min_enrollment_samples)
+            if self.voice_fingerprint.is_enrolled():
+                return True, f"Captured sample {enrolled}/{minimum} (RMS={rms:.4f}). Profile is ready."
+            return True, f"Captured sample {enrolled}/{minimum} (RMS={rms:.4f})."
+        finally:
+            self._enrollment_lock.release()
+
+    def clear_voice_profile(self) -> tuple[bool, str]:
+        """Remove enrolled voice profile samples."""
+        if self.is_recording or self.is_command_recording:
+            return False, "Finish dictation before clearing the profile."
+        self.voice_fingerprint.clear_profile()
+        return True, "Voice profile cleared."
+
+    def get_personal_dictionary_path(self) -> str:
+        """Return resolved personal dictionary file path."""
+        return str(resolve_personal_dictionary_path(self.config))
+
+    def ensure_personal_dictionary_exists(self) -> tuple[bool, str]:
+        """Create personal dictionary if missing."""
+        path = resolve_personal_dictionary_path(self.config)
+        if path.exists():
+            return True, f"Personal dictionary exists: {path}"
+        result = init_personal_dictionary(self.config)
+        if result == 0:
+            return True, f"Created personal dictionary: {path}"
+        return False, "Could not initialize personal dictionary."
+
+    def open_personal_dictionary(self) -> tuple[bool, str]:
+        """Open the personal dictionary in the system editor."""
+        ok, message = self.ensure_personal_dictionary_exists()
+        if not ok:
+            return False, message
+
+        path = resolve_personal_dictionary_path(self.config)
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            elif sys.platform.startswith("win"):
+                os.startfile(str(path))  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+            return True, f"Opened dictionary: {path}"
+        except Exception as exc:
+            return False, f"Could not open dictionary: {exc}"
+
+    def reload_personal_dictionary(self) -> tuple[bool, str]:
+        """Reload personal dictionary terms in the active transcriber."""
+        try:
+            stats = self.transcriber.reload_personal_dictionary()
+            preferred = int(stats.get("preferred_terms", 0))
+            corrections = int(stats.get("corrections", 0))
+            return True, f"Reloaded dictionary ({preferred} terms, {corrections} rules)."
+        except Exception as exc:
+            return False, f"Could not reload dictionary: {exc}"
+
+    def get_personal_dictionary_payload(self) -> dict:
+        """Return loaded personal dictionary terms/corrections for editable UI."""
+        return load_personal_dictionary(self.config)
+
+    def save_personal_dictionary_payload(
+        self, preferred_terms: list[str], corrections: list[dict]
+    ) -> tuple[bool, str]:
+        """Persist personal dictionary edits and reload the active transcriber."""
+        try:
+            path = save_personal_dictionary(self.config, preferred_terms, corrections)
+            self.transcriber.reload_personal_dictionary()
+            return True, f"Saved dictionary: {path}"
+        except Exception as exc:
+            return False, f"Could not save dictionary: {exc}"
+
+    def get_model_options(self) -> dict:
+        """Return provider/model options for settings UI."""
+        return {
+            "providers": [provider.__dict__ for provider in self.model_registry.providers()],
+            "whisper_models": [model.__dict__ for model in self.model_registry.models_for("whisper")],
+            "deepgram_models": [model.__dict__ for model in self.model_registry.models_for("deepgram")],
+            "openai_models": [model.__dict__ for model in self.model_registry.models_for("openai")],
+            "cleanup_models": [
+                model.__dict__
+                for model in self.model_registry.models_for("openai", purpose="cleanup")
+            ],
+            "final_pass_modes": list(self.model_registry.FINAL_PASS_MODES),
+            "post_processing_modes": list(self.model_registry.POST_PROCESSING_MODES),
+            "output_formats": list(self.model_registry.OUTPUT_FORMATS),
+        }
+
+    def get_secret_statuses(self) -> dict:
+        """Return API-key source status without exposing key values."""
+        return {
+            provider: self.secret_store.status(provider, self.config).__dict__
+            for provider in ("openai", "deepgram")
+        }
+
+    def set_api_key(self, provider: str, value: str) -> tuple[bool, str]:
+        """Store or clear an API key in Keychain."""
+        ok, message = self.secret_store.set_api_key(provider, value)
+        if ok and hasattr(self, "transcriber"):
+            # No object rebuild needed: Transcriber resolves keys on demand.
+            if self.verbose_logs:
+                print(f"[Secrets] {message}")
+        return ok, message
+
+    def set_transcription_settings(self, updates: dict) -> tuple[bool, str]:
+        """Persist model/provider/output settings and update runtime objects."""
+        try:
+            if "transcription.provider" in updates:
+                updates["transcription.provider"] = self.model_registry.validate_provider(
+                    updates["transcription.provider"]
+                )
+            if "transcription.final_pass_provider_priority" in updates:
+                updates["transcription.final_pass_provider_priority"] = (
+                    self.model_registry.normalize_provider_priority(
+                        updates["transcription.final_pass_provider_priority"]
+                    )
+                )
+            self.settings_service.update_many(updates)
+            self._refresh_runtime_config_views()
+            return True, "Transcription settings saved."
+        except Exception as exc:
+            return False, f"Could not save transcription settings: {exc}"
+
+    def set_hotkey_settings(self, updates: dict) -> tuple[bool, str]:
+        """Persist hotkeys and restart the global listener when possible."""
+        if self.is_recording or self.is_command_recording:
+            return False, "Finish the current recording before changing hotkeys."
+
+        old_config = {
+            "hotkey": self.config.get("ptt", {}).get("hotkey"),
+            "secondary_hotkey": self.config.get("ptt", {}).get("secondary_hotkey"),
+            "command_hotkey": self.config.get("window_management", {}).get("command_hotkey"),
+            "hotkey_prefix": self.config.get("window_management", {}).get("hotkey_prefix"),
+        }
+
+        try:
+            self.settings_service.update_many(updates)
+            from ptt_handler import PTTHandler
+
+            candidate = PTTHandler(self.config)
+        except Exception as exc:
+            # Restore only the keys this method owns.
+            self.config.setdefault("ptt", {})["hotkey"] = old_config["hotkey"]
+            self.config.setdefault("ptt", {})["secondary_hotkey"] = old_config["secondary_hotkey"]
+            self.config.setdefault("window_management", {})["command_hotkey"] = old_config["command_hotkey"]
+            self.config.setdefault("window_management", {})["hotkey_prefix"] = old_config["hotkey_prefix"]
+            self.settings_service.save()
+            return False, f"Invalid hotkey settings: {exc}"
+
+        listener_was_running = bool(getattr(self.ptt_handler, "listener", None))
+        if listener_was_running:
+            try:
+                self.ptt_handler.stop()
+            except Exception as exc:
+                print(f"Error stopping old PTT handler: {exc}")
+        self.ptt_handler = candidate
+        if listener_was_running:
+            self.ptt_handler.start(
+                on_press=self.on_ptt_press,
+                on_release=self.on_ptt_release,
+            )
+            if self.window_manager:
+                self._setup_window_management_hotkeys()
+        return True, "Hotkeys saved."
+
+    def set_general_settings(self, updates: dict) -> tuple[bool, str]:
+        """Persist general UI/output settings."""
+        try:
+            self.settings_service.update_many(updates)
+            self._refresh_runtime_config_views()
+            return True, "General settings saved."
+        except Exception as exc:
+            return False, f"Could not save general settings: {exc}"
+
+    def get_history_records(self, query: str = "", limit: int = 100) -> list[dict]:
+        """Return recent transcript history as serializable dictionaries."""
+        return [record.__dict__ for record in self.history_store.recent(query=query, limit=limit)]
+
+    def delete_history_record(self, record_id: int) -> tuple[bool, str]:
+        ok = self.history_store.delete(record_id)
+        return ok, "Deleted history item." if ok else "History item was not found."
+
+    def clear_history(self) -> tuple[bool, str]:
+        count = self.history_store.clear()
+        return True, f"Cleared {count} history item(s)."
+
+    def export_history(self, path: str) -> tuple[bool, str]:
+        try:
+            exported = self.history_store.export_csv(Path(path).expanduser())
+            return True, f"Exported history to {exported}"
+        except Exception as exc:
+            return False, f"Could not export history: {exc}"
+
+    def run_doctor_text(self) -> tuple[bool, str]:
+        """Run doctor and capture text for the Advanced settings tab."""
+        buffer = io.StringIO()
+        config_path = self.config.get("__config_path__", str(default_user_config_path()))
+        with contextlib.redirect_stdout(buffer):
+            exit_code = run_doctor(str(config_path))
+        return exit_code == 0, buffer.getvalue()
+
+    def reset_settings_to_defaults(self) -> tuple[bool, str]:
+        """Reset YAML config to packaged defaults while preserving runtime metadata."""
+        try:
+            default_config = yaml.safe_load(read_resource_text("default_config.yaml")) or {}
+            metadata = {
+                "__config_path__": self.config.get("__config_path__"),
+                "__config_dir__": self.config.get("__config_dir__"),
+            }
+            self.config.clear()
+            self.config.update(default_config)
+            for key, value in metadata.items():
+                if value:
+                    self.config[key] = value
+            self.settings_service = SettingsService(self.config)
+            self.settings_service.save()
+            self._refresh_runtime_config_views()
+            return True, "Settings reset to packaged defaults."
+        except Exception as exc:
+            return False, f"Could not reset settings: {exc}"
+
+    def _refresh_runtime_config_views(self):
+        """Apply changed config values to long-lived runtime objects."""
+        if hasattr(self, "transcriber"):
+            tx_cfg = self.config.get("transcription", {})
+            self.transcriber.transcription_config = tx_cfg
+            self.transcriber.provider = self.transcriber._normalize_provider_name(
+                tx_cfg.get("provider", "whisper")
+            ) or "whisper"
+            self.transcriber.language = tx_cfg.get("language", self.transcriber.language)
+            self.transcriber.output_format = tx_cfg.get("output_format", "clipboard")
+            self.transcriber.auto_paste = bool(tx_cfg.get("auto_paste", False))
+            self.transcriber.use_custom_dictionary = bool(tx_cfg.get("use_custom_dictionary", True))
+            self.transcriber.deepgram_config = self.config.get("deepgram", {})
+            self.transcriber.openai_config = self.config.get("openai", {})
+            self.transcriber.deepgram_streaming = bool(
+                self.transcriber.deepgram_config.get("streaming", True)
+            )
+            self.transcriber.model_name = tx_cfg.get("model", self.transcriber.model_name)
+            if self.transcriber.provider in {"deepgram", "openai"}:
+                self.transcriber.model_name = tx_cfg.get(
+                    "whisper_fallback_model", self.transcriber.model_name
+                )
+            self.transcriber.reload_personal_dictionary(log_on_success=False)
+        if hasattr(self, "noise_suppressor"):
+            ns_cfg = self.config.get("noise_suppression", {})
+            self.noise_suppressor.enabled = bool(ns_cfg.get("enabled", True))
+            self.noise_suppressor.stationary_reduction = ns_cfg.get(
+                "stationary_noise_reduction",
+                self.noise_suppressor.stationary_reduction,
+            )
+            self.noise_suppressor.vad_aggressiveness = ns_cfg.get(
+                "vad_aggressiveness",
+                self.noise_suppressor.vad_aggressiveness,
+            )
+        if hasattr(self, "post_processor"):
+            self.post_processor.config = self.config
+
+    def set_show_main_window_on_startup(self, enabled: bool) -> tuple[bool, str]:
+        """Persist whether the main window should be shown on startup."""
+        value = bool(enabled)
+        self.config.setdefault("ui", {})["show_main_window"] = value
+        saved_path = _save_config(self.config)
+        if self.verbose_logs:
+            print(f"[Config] Saved ui.show_main_window to {saved_path}")
+        return True, f"Startup window is now {'enabled' if value else 'hidden'}."
+
+    def set_startup_splash_enabled(self, enabled: bool) -> tuple[bool, str]:
+        """Persist startup splash preference."""
+        value = bool(enabled)
+        ui_cfg = self.config.setdefault("ui", {})
+        splash_cfg = ui_cfg.setdefault("startup_splash", {})
+        splash_cfg["enabled"] = value
+        saved_path = _save_config(self.config)
+        if self.verbose_logs:
+            print(f"[Config] Saved ui.startup_splash.enabled to {saved_path}")
+        return True, f"Startup splash {'enabled' if value else 'disabled'}."
+
+    def set_terminal_startup_animation_enabled(self, enabled: bool) -> tuple[bool, str]:
+        """Persist terminal startup animation preference."""
+        value = bool(enabled)
+        self.config.setdefault("app", {})["startup_animation"] = value
+        saved_path = _save_config(self.config)
+        if self.verbose_logs:
+            print(f"[Config] Saved app.startup_animation to {saved_path}")
+        return True, f"Terminal startup animation {'enabled' if value else 'disabled'}."
 
     def _start_worker(self, target, *args):
         """Start a background worker and track it for shutdown."""
@@ -733,6 +1273,70 @@ class Bloviate:
             )
             self.ui_window.signals.update_status.emit("Ready")
 
+    def _active_target_context(self) -> dict:
+        """Best-effort active app/window metadata for local history."""
+        if sys.platform != "darwin":
+            return {"target_app": "", "target_window": ""}
+
+        script = '''
+        tell application "System Events"
+            set appName to name of first application process whose frontmost is true
+            set windowName to ""
+            try
+                set windowName to name of front window of first application process whose frontmost is true
+            end try
+            return appName & "\n" & windowName
+        end tell
+        '''
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=0.5,
+            )
+            if result.returncode != 0:
+                return {"target_app": "", "target_window": ""}
+            lines = result.stdout.splitlines()
+            return {
+                "target_app": lines[0].strip() if lines else "",
+                "target_window": lines[1].strip() if len(lines) > 1 else "",
+            }
+        except Exception:
+            return {"target_app": "", "target_window": ""}
+
+    def _record_history(
+        self,
+        *,
+        text: str,
+        original_text: str = "",
+        mode: str = "dictation",
+        post_processing_mode: str = "verbatim",
+        provider: str = "",
+        voice_score: Optional[float] = None,
+        duration_s: Optional[float] = None,
+        output_action: str = "",
+    ):
+        if not bool(self.config.get("history", {}).get("enabled", True)):
+            return
+        try:
+            context = self._active_target_context()
+            self.history_store.add_transcript(
+                text=text,
+                original_text=original_text or text,
+                mode=mode,
+                post_processing_mode=post_processing_mode,
+                provider=provider,
+                voice_score=voice_score,
+                duration_s=duration_s,
+                audio_device=self.audio_capture.get_active_device_label(),
+                target_app=context.get("target_app", ""),
+                target_window=context.get("target_window", ""),
+                output_action=output_action,
+            )
+        except Exception as exc:
+            print(f"[History] Could not record transcript: {exc}")
+
     def process_command_recording(self, recorded_chunks=None):
         """Process the recorded command audio."""
         if self._shutdown_event.is_set():
@@ -754,6 +1358,7 @@ class Bloviate:
 
         command = None
         text = stream_text
+        provider_used = "deepgram_streaming" if stream_text else ""
         if stream_text:
             command = self._parse_window_command(stream_text)
             if command:
@@ -784,6 +1389,15 @@ class Bloviate:
             return
 
         print(f"[CMD] Transcribed: {text}")
+        self._record_history(
+            text=text,
+            original_text=text,
+            mode="command",
+            post_processing_mode="verbatim",
+            provider=provider_used,
+            duration_s=len(audio) / self.config["audio"]["sample_rate"],
+            output_action="command",
+        )
 
         if command:
             print(f"[CMD] Recognized command: {command}")
@@ -827,6 +1441,17 @@ class Bloviate:
         # Keep a denoised path for transcription and an optional raw path for
         # speaker verification (noise suppression can blur speaker identity).
         audio_for_transcription = self.noise_suppressor.process(raw_audio)
+        raw_speech = self.noise_suppressor.speech_stats(raw_audio)
+        processed_speech = self.noise_suppressor.speech_stats(audio_for_transcription)
+        print(
+            "[Audio] "
+            f"raw_rms={raw_speech['rms']:.5f}, "
+            f"raw_speech={raw_speech['speech_frames']}/{raw_speech['frames']} "
+            f"({raw_speech['speech_ratio']:.2%}), "
+            f"processed_rms={processed_speech['rms']:.5f}, "
+            f"processed_speech={processed_speech['speech_frames']}/{processed_speech['frames']} "
+            f"({processed_speech['speech_ratio']:.2%})"
+        )
         verify_on_raw = bool(
             self.config.get("voice_fingerprint", {}).get("verify_on_raw_audio", True)
         )
@@ -863,6 +1488,13 @@ class Bloviate:
 
         final_provider_order = self.transcriber.get_final_pass_provider_priority()
         text = None
+        provider_used = "deepgram_streaming" if stream_text else ""
+        if not stream_text and not self.noise_suppressor.has_speech(audio_for_transcription):
+            print("[Audio] Skipping final-pass transcription: clip does not contain enough speech")
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit("No speech detected")
+            return
+
         if final_pass_mode == "streaming":
             text = stream_text
             if not text:
@@ -894,10 +1526,29 @@ class Bloviate:
             if self._try_voice_command(text):
                 return
 
-            self.transcriber.output_text(text)
+            context = self._active_target_context()
+            processed = self.post_processor.process(
+                text,
+                target_app=context.get("target_app", ""),
+            )
+            output_text = processed.text
+            if processed.changed:
+                print(f"[Post-processing] {processed.mode}/{processed.provider}: {output_text}")
+
+            self.transcriber.output_text(output_text)
+            self._record_history(
+                text=output_text,
+                original_text=processed.original_text,
+                mode="dictation",
+                post_processing_mode=processed.mode,
+                provider=provider_used,
+                voice_score=None if similarity < 0 else similarity,
+                duration_s=len(raw_audio) / self.config["audio"]["sample_rate"],
+                output_action=self.config.get("transcription", {}).get("output_format", "clipboard"),
+            )
 
             if self.ui_window:
-                self.ui_window.signals.update_transcription.emit(text)
+                self.ui_window.signals.update_transcription.emit(output_text)
                 self.ui_window.signals.update_status.emit("Ready")
         else:
             print("✗ No transcription generated")
@@ -998,19 +1649,55 @@ class Bloviate:
         if self.talk_mode and self.config.get("voice_fingerprint", {}).get("enabled", False) and not self.voice_fingerprint.enabled:
             print("Voice fingerprinting unavailable; talk mode bypasses verification.")
 
+        _show_startup_animation(self.config)
+
         print("\n=== Bloviate ===")
-        if len(self.ptt_handler.hotkey_strs) > 1:
-            print(f"Hotkeys: {', '.join(self.ptt_handler.hotkey_strs)}")
-        else:
-            print(f"Hotkey: {self.ptt_handler.hotkey_str}")
-        print(f"Voice mode: {self.voice_mode}")
-        print("Press and hold the hotkey to record, release to transcribe.")
+        hotkey_label = (
+            ", ".join(self.ptt_handler.hotkey_strs)
+            if len(self.ptt_handler.hotkey_strs) > 1
+            else self.ptt_handler.hotkey_str
+        )
+        input_label = self.audio_capture.get_active_device_label()
+        mode_label = "Talk mode (verification off)" if self.talk_mode else "Whisper mode (verification on)"
+        print(f"Ready • Hold {hotkey_label} to dictate")
+        print(f"Input • {input_label}")
+        print(f"Mode  • {mode_label}")
         print("Press Ctrl+C to exit.\n")
 
         # Create UI
         from ui import create_ui
 
-        self.ui_app, self.ui_window = create_ui(self.config)
+        self.ui_app, self.ui_window = create_ui(
+            self.config,
+            get_audio_inputs=self.list_audio_input_options,
+            set_audio_input=self.set_audio_input_device,
+            get_voice_profile_status=self.get_voice_profile_status,
+            set_voice_mode=self.set_voice_mode,
+            set_voice_threshold=self.set_voice_threshold,
+            capture_enrollment_sample=self.capture_enrollment_sample,
+            clear_voice_profile=self.clear_voice_profile,
+            get_personal_dictionary_path=self.get_personal_dictionary_path,
+            ensure_personal_dictionary_exists=self.ensure_personal_dictionary_exists,
+            open_personal_dictionary=self.open_personal_dictionary,
+            reload_personal_dictionary=self.reload_personal_dictionary,
+            get_personal_dictionary_payload=self.get_personal_dictionary_payload,
+            save_personal_dictionary_payload=self.save_personal_dictionary_payload,
+            get_model_options=self.get_model_options,
+            get_secret_statuses=self.get_secret_statuses,
+            set_api_key=self.set_api_key,
+            set_transcription_settings=self.set_transcription_settings,
+            set_hotkey_settings=self.set_hotkey_settings,
+            set_general_settings=self.set_general_settings,
+            get_history_records=self.get_history_records,
+            delete_history_record=self.delete_history_record,
+            clear_history=self.clear_history,
+            export_history=self.export_history,
+            run_doctor_text=self.run_doctor_text,
+            reset_settings_to_defaults=self.reset_settings_to_defaults,
+            set_show_main_window_on_startup=self.set_show_main_window_on_startup,
+            set_startup_splash_enabled=self.set_startup_splash_enabled,
+            set_terminal_startup_animation_enabled=self.set_terminal_startup_animation_enabled,
+        )
         if self.talk_mode and self.ui_window:
             self.ui_window.signals.update_voice_match.emit(True, -1.0)
 
@@ -1114,6 +1801,11 @@ def main():
         help='Override voice mode (whisper=verify, talk=bypass)'
     )
     parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Enable verbose startup/runtime logs (developer mode)'
+    )
+    parser.add_argument(
         '--add-term',
         '--learn-term',
         action='append',
@@ -1167,6 +1859,11 @@ def main():
 
     if args.init_personal_dictionary:
         sys.exit(init_personal_dictionary(config))
+
+    if args.verbose:
+        config.setdefault("app", {})["verbose_logs"] = True
+
+    _configure_runtime_output(config)
 
     if args.add_term:
         path, added = add_preferred_terms(config, args.add_term)

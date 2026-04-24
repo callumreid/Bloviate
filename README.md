@@ -1,125 +1,163 @@
 # Bloviate
 
-A voice-fingerprinting dictation tool designed for whispering in noisy environments.
+Bloviate is a macOS-first voice dictation app for whispering in noisy spaces. It combines push-to-talk dictation, speaker verification, streaming transcription, an accuracy-first final pass, personal vocabulary, local history, and bring-your-own API keys.
 
-## Features
+## What It Does
 
-- **Voice Fingerprinting**: Only transcribes audio matching your voice signature
-- **Noise Suppression**: Filters out background speech and noise
-- **Hybrid Final Pass**: Uses low-latency streaming plus accuracy-first final transcription
-- **Push-to-Talk**: Global keyboard shortcut to activate listening
-- **Real-time Feedback**: Visual display of audio levels and voice detection
-- **Scarlett Integration**: Optimized for Scarlett 4i4 audio interface
+- Verifies your enrolled voice before transcribing in whisper mode
+- Supports talk mode when you want normal dictation without speaker verification
+- Uses Deepgram for live interim text, OpenAI or Deepgram for final text, and local Whisper as fallback
+- Lets you configure audio input, hotkeys, models, providers, API keys, dictionary, cleanup, history, startup behavior, and diagnostics from Settings
+- Stores user config/state under `~/Library/Application Support/Bloviate`
+- Keeps transcript history locally in SQLite; raw audio is not stored by default
 
-## Current Product Status
+## Current Status
 
-Bloviate is currently **macOS-first** and still optimized around a power-user local setup, not a polished cross-platform product.
+Bloviate is a technical macOS beta. It is ready to demo and share with technical users, but it is not yet a signed/notarized consumer `.app`.
 
-- Dictation works best on macOS with microphone + accessibility permissions enabled
-- Window management and auto-paste currently rely on AppleScript and macOS accessibility APIs
-- Audio input can target any detected microphone; Scarlett remains a documented happy path
-
-See [PRODUCTION_READINESS.md](/Users/bronson/personal/bloviate/PRODUCTION_READINESS.md) for the short-term launch posture and beta checklist.
-
-## Setup
+Recommended first public install path:
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -e .
+brew install portaudio python@3.12 pipx
+pipx ensurepath
+pipx install git+https://github.com/callumreid/Bloviate.git
 ```
 
-This installs the `bloviate` CLI into the active environment.
+Homebrew HEAD install for beta E2E testing:
 
-Run the built-in preflight before your first real session:
+```bash
+brew install --HEAD https://raw.githubusercontent.com/callumreid/Bloviate/main/Formula/bloviate.rb
+```
+
+See [INSTALL.md](/Users/bronson/personal/bloviate/INSTALL.md) for beta install, permissions, upgrades, and the signed-app roadmap.
+
+## First Run
+
+```bash
+bloviate --doctor
+bloviate --show-paths
+bloviate --list-devices
+bloviate --voice-mode talk
+```
+
+Then open Settings from the window or menu bar icon and configure:
+
+- microphone
+- push-to-talk hotkey
+- OpenAI / Deepgram API keys
+- provider/model priority
+- dictionary terms and corrections
+- cleanup mode
+- transcript history preference
+
+For whisper verification mode:
+
+```bash
+bloviate --enroll
+bloviate
+```
+
+## API Keys
+
+Bloviate is bring-your-own-key. Settings saves OpenAI and Deepgram keys to macOS Keychain through `keyring` when available. Environment variables still work:
+
+```bash
+export OPENAI_API_KEY="..."
+export DEEPGRAM_API_KEY="..."
+```
+
+Provider priority defaults to:
+
+1. OpenAI final pass
+2. Deepgram final pass
+3. Local Whisper fallback
+
+## Personal Dictionary
+
+The dictionary lives at:
+
+```bash
+~/Library/Application Support/Bloviate/personal_dictionary.yaml
+```
+
+It contains:
+
+- `preferred_terms`: words/names/tools used to bias transcription
+- `corrections`: deterministic rewrites for recurring mistakes
+
+Example:
+
+```yaml
+preferred_terms:
+  - Raycast
+  - kubectl
+  - gpt-4o-transcribe
+
+corrections:
+  - phrase: "kubectl"
+    variations:
+      - "cube cuddle"
+      - "cube control"
+    match: "substring"
+```
+
+You can edit this in Settings or from the CLI:
+
+```bash
+bloviate --init-personal-dictionary
+bloviate --add-term "Raycast" --add-term "kubectl"
+bloviate --show-personal-dictionary
+```
+
+## Local History
+
+Transcript history is enabled by default and stored locally at:
+
+```bash
+~/Library/Application Support/Bloviate/history.sqlite
+```
+
+History stores text metadata such as timestamp, mode, provider, target app/window, voice score, and output action. It does not store raw audio by default. You can search, copy, delete, clear, export, or disable history in Settings.
+
+## Permissions
+
+On macOS, grant permissions to the app host you use to run Bloviate:
+
+- Microphone: required for audio capture
+- Accessibility / Input Monitoring: required for global hotkeys and auto-paste
+- Automation/System Events: required for window-management commands
+
+If running through Terminal or iTerm, grant permissions to that terminal app. A future signed `.app` will request permissions under the Bloviate app identity.
+
+## Development
+
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -e .
+python -m unittest discover -s tests
+```
+
+Useful commands:
 
 ```bash
 python src/main.py --doctor
 python src/main.py --list-devices
+python src/main.py --show-paths
+python src/main.py --voice-mode talk
 ```
 
-Create your local personal dictionary file:
+## Release Roadmap
 
-```bash
-python src/main.py --init-personal-dictionary
-```
+Current beta distribution is Homebrew prerequisites plus `pipx`.
 
-Bloviate stores per-user config and state under `~/Library/Application Support/Bloviate` on macOS by default.
-Run `python src/main.py --show-paths` if you want to confirm the exact locations.
+Signed `.app` distribution is planned after beta hardening and requires:
 
-It handles both parts of the vocabulary problem:
+- PyInstaller or similar app bundling
+- stable icon/bundle identifier
+- Apple Developer Program membership
+- Developer ID signing certificate
+- hardened runtime and notarization
+- release CI that builds, signs, notarizes, and attaches artifacts
 
-- `preferred_terms`: bias the models toward exact spellings before transcription
-- `corrections`: deterministically rewrite known bad outputs after transcription
-
-You can also add preferred terms from the CLI without editing YAML:
-
-```bash
-python src/main.py --add-term "Raycast" --add-term "kubectl" --add-term "gpt-4o-transcribe"
-python src/main.py --show-personal-dictionary
-```
-
-Bloviate still reads legacy `custom_dictionary.yaml` and `learned_terms.txt` files if you already have them, but new writes go to `personal_dictionary.yaml`.
-
-For a beta install from GitHub without a signed `.app`, see [INSTALL_BETA.md](/Users/bronson/personal/bloviate/INSTALL_BETA.md).
-
-## Usage
-
-### 1. Enroll Your Voice
-First, record samples of your whisper voice for fingerprinting:
-```bash
-python src/main.py --enroll
-```
-This will prompt you to whisper several phrases to build your voice profile.
-
-### 2. Run the Dictation Tool
-```bash
-python src/main.py
-```
-
-- For a first-run smoke test without voice enrollment, use:
-  - `python src/main.py --voice-mode talk`
-- Press and hold `Cmd+Option` (configurable) to activate listening
-- Whisper into your mic
-- Release when done
-- Only audio matching your voice will be transcribed
-- Use talk mode to bypass voice matching:
-  - `python src/main.py --voice-mode talk`
-  - Or set `voice_fingerprint.mode: "talk"` in `config.yaml`
-
-### 3. Configuration
-Edit `config.yaml` to customize:
-- Keyboard shortcuts
-- Audio device selection
-- Voice matching threshold
-- Noise suppression levels
-- Final-pass provider order (`openai` / `deepgram` / `whisper`)
-- Optional personal dictionary path via `transcription.personal_dictionary_path`
-- Prompt tuning via `transcription.initial_prompt`, `prompt_max_terms`, and `prompt_max_chars`
-
-You can also set `BLOVIATE_PERSONAL_DICTIONARY_PATH` if you want the dictionary outside the repo entirely.
-Legacy `BLOVIATE_CUSTOM_DICTIONARY_PATH` and `BLOVIATE_LEARNED_TERMS_PATH` still work for migration.
-
-## First-Run Checklist
-
-Before handing this to someone else, make sure they can do these in order:
-
-1. `python src/main.py --doctor`
-2. `python src/main.py --show-paths`
-3. `python src/main.py --list-devices`
-4. Set `OPENAI_API_KEY` / `DEEPGRAM_API_KEY` if they want hosted STT providers
-5. Run `python src/main.py --voice-mode talk` to verify audio, UI, clipboard, and hotkeys
-6. Run `python src/main.py --enroll` before using whisper verification mode
-
-## How It Works
-
-1. **Audio Capture**: Captures audio from your Scarlett interface
-2. **Noise Suppression**: Applies spectral subtraction and adaptive filtering
-3. **Voice Activity Detection**: Detects speech segments
-4. **Speaker Verification**: Compares against your enrolled voice profile
-5. **Transcription**: Sends verified audio to speech-to-text engine using live Deepgram plus an accuracy-first final pass
-6. **Vocabulary Biasing**: Feeds personal dictionary preferred terms and command phrases into prompting/keyterms before post-correction runs
-7. **Correction Rules**: Applies personal dictionary corrections after transcription for known recurring mistakes
+See [PRODUCTION_READINESS.md](/Users/bronson/personal/bloviate/PRODUCTION_READINESS.md) for launch posture and remaining readiness work.

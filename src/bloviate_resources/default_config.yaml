@@ -1,11 +1,20 @@
 # Bloviate Configuration
 
+# App Presentation / Logging
+app:
+  verbose_logs: false  # Developer mode: show full startup/runtime internals in terminal output
+  suppress_third_party_warnings: true  # Hide noisy library warnings during normal startup
+  startup_animation: false  # Show a short ASCII startup animation in interactive terminals
+  startup_animation_loops: 1  # Number of animation passes before the app banner
+  startup_animation_frame_delay_s: 0.04  # Seconds per animation frame
+  startup_animation_step: 2  # Horizontal movement per frame (larger = faster, less smooth)
+
 # Audio Settings
 audio:
   sample_rate: 16000
   chunk_size: 1024
   channels: 1
-  device_name: ""  # Blank = first available input device; set e.g. "Scarlett" to prefer a specific mic
+  device_name: ""  # Blank = system default input device; set e.g. "Scarlett" to prefer a specific mic
 
 # Push-to-Talk Settings
 ptt:
@@ -54,6 +63,19 @@ transcription:
   output_format: "clipboard"  # clipboard, stdout, both
   auto_paste: false  # Safer default for new users; enable locally if you want paste-on-release
   use_custom_dictionary: true  # Apply correction rules from the personal/legacy dictionary
+
+# Local transcript history
+history:
+  enabled: true  # Text-only local history; raw audio is never stored by default
+  max_ui_records: 100
+
+# Post-processing / cleanup
+post_processing:
+  mode: "verbatim"  # verbatim, clean, coding, message
+  openai_enabled: false  # Optional AI cleanup after transcription
+  openai_model: "gpt-4o"
+  timeout_s: 12
+  temperature: 0.1
 
 # Deepgram (live streaming)
 deepgram:
@@ -109,13 +131,17 @@ openai:
 
 # UI
 ui:
+  startup_splash:
+    enabled: true  # Show native splash card on app startup
+    duration_ms: 1400
+    fade_out_ms: 220
   show_waveform: true
   show_metrics: true
   window_size: [400, 200]
   theme: "dark"
   interim_update_interval_s: 0.15
   show_menubar_indicator: true  # Show status in macOS menu bar
-  show_main_window: false  # Hide the debug/status window by default
+  show_main_window: true  # Keep dashboard visible by default for first-run setup
   ptt_overlay:
     enabled: true
     margin: 20  # Distance from bottom of screen

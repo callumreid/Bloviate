@@ -5,7 +5,6 @@ Handles audio transcription using Whisper, Deepgram, or OpenAI.
 
 import json
 import io
-import os
 import re
 import subprocess
 import sys
@@ -15,14 +14,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import wave
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
-import yaml
 from pynput.keyboard import Controller, Key
 from command_vocabulary import get_command_prompt_phrases
 from personal_dictionary import load_personal_dictionary
+from secret_store import SecretStore
 
 try:
     from deepgram_stream import DeepgramLiveSession
@@ -35,6 +33,8 @@ class Transcriber:
 
     def __init__(self, config: dict):
         self.config = config
+        self.secret_store = SecretStore()
+        self.verbose_logs = bool(config.get("app", {}).get("verbose_logs", False))
         self.transcription_config = config.get("transcription", {})
         self.provider = self._normalize_provider_name(
             self.transcription_config.get('provider', 'whisper')
@@ -65,25 +65,7 @@ class Transcriber:
         # Keyboard controller for auto-paste
         self.keyboard = Controller()
 
-        personal_dictionary = load_personal_dictionary(self.config)
-        self.learned_terms = personal_dictionary.get("preferred_terms", [])
-        self.custom_dictionary = personal_dictionary.get("corrections", []) if self.use_custom_dictionary else []
-        self.personal_dictionary_sources = personal_dictionary.get("sources", [])
-
-        self._prompt_terms = self._build_prompt_terms()
-        self._command_prompt_terms = self._build_command_prompt_terms()
-        self._deepgram_bias_terms = self._build_deepgram_bias_terms()
-        self._deepgram_command_terms = self._build_deepgram_command_terms()
-        if self.provider == "deepgram" and self._deepgram_bias_terms:
-            print(f"[Deepgram] Loaded {len(self._deepgram_bias_terms)} bias terms")
-        if self.provider == "deepgram" and self._deepgram_command_terms:
-            print(f"[Deepgram] Loaded {len(self._deepgram_command_terms)} command keyterms")
-        if self.learned_terms:
-            print(f"[Transcription] Loaded {len(self.learned_terms)} preferred terms")
-        if self.custom_dictionary:
-            print(f"[Transcription] Loaded {len(self.custom_dictionary)} correction rules")
-        if self.personal_dictionary_sources:
-            print(f"[Transcription] Personal dictionary sources: {', '.join(self.personal_dictionary_sources)}")
+        self.reload_personal_dictionary(log_on_success=False)
 
         # Track active Deepgram streams by mode name
         self._streams = {}
@@ -163,6 +145,44 @@ class Transcriber:
         if self.provider == "deepgram":
             return ["deepgram", "whisper"]
         return ["whisper"]
+
+    def reload_personal_dictionary(self, *, log_on_success: bool = True) -> dict:
+        """Reload personal dictionary terms/corrections and rebuild prompt caches."""
+        personal_dictionary = load_personal_dictionary(self.config)
+        self.learned_terms = personal_dictionary.get("preferred_terms", [])
+        self.custom_dictionary = (
+            personal_dictionary.get("corrections", []) if self.use_custom_dictionary else []
+        )
+        self.personal_dictionary_sources = personal_dictionary.get("sources", [])
+
+        self._prompt_terms = self._build_prompt_terms()
+        self._command_prompt_terms = self._build_command_prompt_terms()
+        self._deepgram_bias_terms = self._build_deepgram_bias_terms()
+        self._deepgram_command_terms = self._build_deepgram_command_terms()
+        self._auto_prompt_cache = {}
+
+        if self.verbose_logs and self.provider == "deepgram" and self._deepgram_bias_terms:
+            print(f"[Deepgram] Loaded {len(self._deepgram_bias_terms)} bias terms")
+        if self.verbose_logs and self.provider == "deepgram" and self._deepgram_command_terms:
+            print(f"[Deepgram] Loaded {len(self._deepgram_command_terms)} command keyterms")
+        if self.verbose_logs and self.learned_terms:
+            print(f"[Transcription] Loaded {len(self.learned_terms)} preferred terms")
+        if self.verbose_logs and self.custom_dictionary:
+            print(f"[Transcription] Loaded {len(self.custom_dictionary)} correction rules")
+        if self.verbose_logs and self.personal_dictionary_sources:
+            print(f"[Transcription] Personal dictionary sources: {', '.join(self.personal_dictionary_sources)}")
+        if self.verbose_logs and log_on_success:
+            print(
+                "[Transcription] Reloaded personal dictionary "
+                f"({len(self.learned_terms)} terms, {len(self.custom_dictionary)} rules)"
+            )
+
+        return {
+            "preferred_terms": len(self.learned_terms),
+            "corrections": len(self.custom_dictionary),
+            "sources": list(self.personal_dictionary_sources),
+            "path": personal_dictionary.get("path"),
+        }
 
     def _apply_custom_dictionary(self, text: str) -> str:
         """Apply custom dictionary corrections to transcribed text."""
@@ -297,11 +317,13 @@ class Transcriber:
 
     def _load_whisper_model(self):
         """Lazily load the Whisper model on first use."""
-        print(f"Loading Whisper model: {self.model_name}")
+        if self.verbose_logs:
+            print(f"Loading Whisper model: {self.model_name}")
         try:
             import whisper
             self.model = whisper.load_model(self.model_name)
-            print("Whisper model loaded")
+            if self.verbose_logs:
+                print("Whisper model loaded")
         except Exception as e:
             print(f"Error loading Whisper model: {e}")
             self.model = None
@@ -462,12 +484,15 @@ class Transcriber:
             except Exception as e:
                 print(f"[Deepgram] Error closing stream '{mode}': {e}")
 
+        # Wait briefly for background Whisper preload to finish so Python
+        # doesn't tear down torch/audio state while that thread is active.
+        load_thread = self._whisper_load_thread
+        if load_thread and load_thread.is_alive():
+            load_thread.join(timeout=5.0)
+        self._whisper_load_thread = None
+
     def _get_deepgram_api_key(self) -> Optional[str]:
-        key = self.deepgram_config.get("api_key")
-        if key:
-            return key
-        env_name = self.deepgram_config.get("api_key_env", "DEEPGRAM_API_KEY")
-        return os.getenv(env_name)
+        return self.secret_store.get_api_key("deepgram", self.config)
 
     def _validate_deepgram_key(self):
         """Check the Deepgram API key at startup so failures are obvious."""
@@ -536,14 +561,11 @@ class Transcriber:
         return []
 
     def _build_prompt_terms(self) -> List[str]:
-        """Build prompt terms from explicit config plus preferred vocabulary only."""
+        """Build generic prompt terms from explicit config plus preferred vocabulary only."""
         terms: List[str] = []
         seen = set()
 
         for term in self._coerce_string_list(self.transcription_config.get("prompt_terms")):
-            self._append_unique_term(terms, seen, term)
-
-        for term in self._coerce_string_list(self.deepgram_config.get("keyterm")):
             self._append_unique_term(terms, seen, term)
 
         for term in self.learned_terms:
@@ -759,11 +781,7 @@ class Transcriber:
         return normalized
 
     def _get_openai_api_key(self) -> Optional[str]:
-        key = self.openai_config.get("api_key")
-        if key:
-            return str(key)
-        env_name = self.openai_config.get("api_key_env", "OPENAI_API_KEY")
-        return os.getenv(env_name)
+        return self.secret_store.get_api_key("openai", self.config)
 
     def _audio_to_wav_bytes(self, audio: np.ndarray) -> bytes:
         """Serialize mono float audio to 16-bit PCM WAV bytes."""
@@ -872,6 +890,8 @@ class Transcriber:
 
     def _log_transcription_plan(self):
         """Log which providers and prompts are active for this run."""
+        if not self.verbose_logs:
+            return
         final_providers = self.get_final_pass_provider_priority()
         if final_providers:
             print(f"[Transcription] Final-pass provider order: {', '.join(final_providers)}")
@@ -943,7 +963,8 @@ class Transcriber:
 
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         timeout_s = float(self.openai_config.get("timeout_s", 30))
-        print(f"[OpenAI] Sending {len(wav_bytes)} bytes to model={model}")
+        if self.verbose_logs:
+            print(f"[OpenAI] Sending {len(wav_bytes)} bytes to model={model}")
 
         try:
             with urllib.request.urlopen(req, timeout=timeout_s) as response:
@@ -1010,7 +1031,8 @@ class Transcriber:
         req = urllib.request.Request(url, data=audio_bytes, headers=headers, method="POST")
 
         rms = float(np.sqrt(np.mean(audio ** 2)))
-        print(f"[Deepgram] Sending {len(audio_bytes)} bytes, {len(audio)/self.sample_rate:.2f}s, RMS={rms:.6f}")
+        if self.verbose_logs:
+            print(f"[Deepgram] Sending {len(audio_bytes)} bytes, {len(audio)/self.sample_rate:.2f}s, RMS={rms:.6f}")
 
         try:
             timeout_s = float(self.deepgram_config.get("prerecorded_timeout_s", 30))
@@ -1021,7 +1043,8 @@ class Transcriber:
             duration = metadata.get("duration", "?")
             model = metadata.get("model_info", {})
             model_name = next(iter(model.values()), {}).get("name", "?") if model else "?"
-            print(f"[Deepgram] Response: duration={duration}s, model={model_name}")
+            if self.verbose_logs:
+                print(f"[Deepgram] Response: duration={duration}s, model={model_name}")
 
             channel = payload.get("results", {}).get("channels", [])
             if not channel:

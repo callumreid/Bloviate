@@ -13,7 +13,7 @@ cd bloviate
 source venv/bin/activate
 ```
 
-The setup installs a `bloviate` CLI into that environment, but the repo-local `python src/main.py ...` commands still work too.
+The setup installs a `bloviate` CLI into that environment, but the repo-local `python src/main.py ...` commands still work too. For public beta installs without cloning the repo, use [INSTALL.md](/Users/bronson/personal/bloviate/INSTALL.md).
 
 3. Run the built-in preflight:
 ```bash
@@ -26,7 +26,7 @@ python src/main.py --list-devices
 python src/main.py --init-personal-dictionary
 ```
 
-Bloviate stores per-user state under `~/Library/Application Support/Bloviate` on macOS by default.
+Bloviate stores per-user state under `~/Library/Application Support/Bloviate` on macOS by default, including config, dictionary, voice profile, and text-only local history.
 Run `python src/main.py --show-paths` if you want to confirm the exact locations.
 
 5. Optional: add preferred terms for names, tools, and commands you use a lot:
@@ -208,6 +208,8 @@ Use streaming for live feedback and accuracy-first providers for final text.
 export DEEPGRAM_API_KEY="your_key_here"
 export OPENAI_API_KEY="your_openai_key_here"
 ```
+
+You can also paste API keys into Settings; Bloviate saves them to macOS Keychain when available.
 
 ```yaml
 transcription:

@@ -78,6 +78,7 @@ class VoiceFingerprint:
 
     def __init__(self, config: dict, model_dir: Optional[str] = None):
         self.config = config
+        self.verbose_logs = bool(config.get("app", {}).get("verbose_logs", False))
         self.enabled = config['voice_fingerprint']['enabled']
         self.threshold = config['voice_fingerprint']['threshold']
         self.sample_rate = config['audio']['sample_rate']
@@ -102,7 +103,8 @@ class VoiceFingerprint:
         self.legacy_profile_path = legacy_repo_voice_profile_path()
 
         # Load speaker embedding model
-        print("Loading speaker embedding model...")
+        if self.verbose_logs:
+            print("Loading speaker embedding model...")
         try:
             if EncoderClassifier is None:
                 raise RuntimeError("SpeechBrain EncoderClassifier unavailable")
@@ -110,7 +112,8 @@ class VoiceFingerprint:
                 source=self.model_name,
                 savedir=str(self.model_dir / "pretrained")
             )
-            print("Speaker embedding model loaded")
+            if self.verbose_logs:
+                print("Speaker embedding model loaded")
         except Exception as e:
             print(f"Error loading embedding model: {e}")
             self.enabled = False
@@ -288,7 +291,8 @@ class VoiceFingerprint:
                 self.profile_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, self.profile_path)
                 print(f"Migrated voice profile to {self.profile_path}")
-            print(f"Voice profile loaded: {len(self.enrolled_embeddings)} samples")
+            if self.verbose_logs:
+                print(f"Voice profile loaded: {len(self.enrolled_embeddings)} samples")
             return True
 
         except Exception as e:
