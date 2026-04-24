@@ -106,7 +106,9 @@ Bloviate needs:
 - Accessibility/Input Monitoring for global hotkeys and auto-paste
 - Automation/System Events for window-management commands
 
-If you run Bloviate from Terminal/iTerm, grant permissions to that terminal. If a future `.app` build is used, grant permissions to Bloviate.
+The app now shows a first-run permissions checklist in Settings. Use those buttons to trigger the microphone prompt and open the exact macOS Settings panes.
+
+If you run Bloviate from Terminal/iTerm, grant permissions to that terminal. If you launch `~/Applications/Bloviate.app`, grant permissions to Bloviate.
 
 ## Upgrades
 

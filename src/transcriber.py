@@ -1162,6 +1162,6 @@ class Transcriber:
 
         except subprocess.CalledProcessError as e:
             print(f"Error auto-pasting (AppleScript): {e}")
-            print("You may need to grant accessibility permissions to Terminal/iTerm")
+            print("Grant Accessibility/Automation permission to Bloviate or the terminal app that launched it.")
         except Exception as e:
             print(f"Error auto-pasting: {e}")

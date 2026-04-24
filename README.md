@@ -42,7 +42,7 @@ bloviate --list-devices
 bloviate --voice-mode talk
 ```
 
-Then open Settings from the window or menu bar icon and configure. After `bloviate --install-launcher`, you can start Bloviate from `~/Applications/Bloviate.app` instead of a terminal.
+Then open Settings from the window or menu bar icon and configure. After `bloviate --install-launcher`, you can start Bloviate from `~/Applications/Bloviate.app` instead of a terminal. On first launch, Settings shows a permissions checklist with buttons for microphone, Accessibility, Input Monitoring, and Automation.
 
 - microphone
 - push-to-talk hotkey
@@ -67,6 +67,8 @@ Bloviate is bring-your-own-key. Settings saves OpenAI and Deepgram keys to macOS
 export OPENAI_API_KEY="..."
 export DEEPGRAM_API_KEY="..."
 ```
+
+The launcher sources `~/.zshenv` and `~/.zprofile` so common shell-defined API keys are visible when starting from `Bloviate.app`. Keychain storage is still preferred for public installs.
 
 Provider priority defaults to:
 
@@ -111,6 +113,15 @@ bloviate --add-term "Raycast" --add-term "kubectl"
 bloviate --show-personal-dictionary
 ```
 
+Older repo-local `custom_dictionary.yaml`, `personal_dictionary.yaml`, and `learned_terms.txt` files are imported into the App Support dictionary on launch.
+
+## Cleanup Modes
+
+- Verbatim: keeps the transcription as returned by the speech model.
+- Clean prose: removes common filler and normalizes sentences.
+- Coding: avoids prose rewrites that would damage commands, filenames, or identifiers.
+- Message: formats dictated text like a concise message; it differs most when OpenAI cleanup is enabled.
+
 ## Local History
 
 Transcript history is enabled by default and stored locally at:
@@ -129,7 +140,7 @@ On macOS, grant permissions to the app host you use to run Bloviate:
 - Accessibility / Input Monitoring: required for global hotkeys and auto-paste
 - Automation/System Events: required for window-management commands
 
-If running through Terminal or iTerm, grant permissions to that terminal app. A future signed `.app` will request permissions under the Bloviate app identity.
+If running through Terminal or iTerm, grant permissions to that terminal app. If launching `~/Applications/Bloviate.app`, grant permissions to Bloviate.
 
 ## Development
 

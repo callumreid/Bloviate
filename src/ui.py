@@ -667,6 +667,9 @@ class BloviateUI(QMainWindow):
         export_history=None,
         run_doctor_text=None,
         reset_settings_to_defaults=None,
+        get_permission_statuses=None,
+        request_permission=None,
+        open_permission_settings=None,
         set_show_main_window_on_startup=None,
         set_startup_splash_enabled=None,
         set_terminal_startup_animation_enabled=None,
@@ -698,6 +701,9 @@ class BloviateUI(QMainWindow):
         self.export_history = export_history
         self.run_doctor_text = run_doctor_text
         self.reset_settings_to_defaults = reset_settings_to_defaults
+        self.get_permission_statuses = get_permission_statuses
+        self.request_permission = request_permission
+        self.open_permission_settings = open_permission_settings
         self.set_show_main_window_on_startup = set_show_main_window_on_startup
         self.set_startup_splash_enabled = set_startup_splash_enabled
         self.set_terminal_startup_animation_enabled = set_terminal_startup_animation_enabled
@@ -732,6 +738,7 @@ class BloviateUI(QMainWindow):
         self._settings_error_style = "font-size: 12px; color: #B23B35; font-weight: 600;"
         self._dictionary_terms = []
         self._dictionary_corrections = []
+        self._permissions_prompt_shown = False
 
         self.init_ui()
 
@@ -741,7 +748,8 @@ class BloviateUI(QMainWindow):
 
         # Set window size
         width, height = self.config['ui']['window_size']
-        self.resize(max(width, 520), max(height, 420))
+        self.setMinimumSize(980, 700)
+        self.resize(max(width, 1180), max(height, 860))
 
         self.set_light_theme()
 
@@ -785,6 +793,8 @@ class BloviateUI(QMainWindow):
         self._refresh_audio_inputs()
         self._refresh_voice_controls()
         self._refresh_dictionary_path()
+        self._refresh_permissions()
+        QTimer.singleShot(900, self._maybe_show_permissions_prompt)
 
     def _build_status_tab(self):
         layout = QVBoxLayout()
@@ -865,6 +875,33 @@ class BloviateUI(QMainWindow):
         layout.setSpacing(16)
         scroll.setWidget(content)
         outer_layout.addWidget(scroll)
+
+        # First-run permissions
+        permissions_group = QGroupBox("Permissions")
+        permissions_layout = QVBoxLayout(permissions_group)
+        self.permissions_status_label = QLabel("")
+        self.permissions_status_label.setWordWrap(True)
+        self.permissions_status_label.setStyleSheet(self._settings_status_default_style)
+        permissions_layout.addWidget(self.permissions_status_label)
+        permissions_actions = QHBoxLayout()
+        self.request_microphone_button = QPushButton("Request Microphone")
+        self.open_accessibility_button = QPushButton("Open Accessibility")
+        self.open_input_monitoring_button = QPushButton("Open Input Monitoring")
+        self.open_automation_button = QPushButton("Open Automation")
+        self.refresh_permissions_button = QPushButton("Refresh")
+        permissions_actions.addWidget(self.request_microphone_button)
+        permissions_actions.addWidget(self.open_accessibility_button)
+        permissions_actions.addWidget(self.open_input_monitoring_button)
+        permissions_actions.addWidget(self.open_automation_button)
+        permissions_actions.addWidget(self.refresh_permissions_button)
+        permissions_actions.addStretch()
+        permissions_layout.addLayout(permissions_actions)
+        layout.addWidget(permissions_group)
+        self.request_microphone_button.clicked.connect(lambda: self._request_permission("microphone"))
+        self.open_accessibility_button.clicked.connect(lambda: self._request_permission("accessibility"))
+        self.open_input_monitoring_button.clicked.connect(lambda: self._request_permission("input_monitoring"))
+        self.open_automation_button.clicked.connect(lambda: self._request_permission("automation"))
+        self.refresh_permissions_button.clicked.connect(self._refresh_permissions)
 
         # Audio settings
         audio_group = QGroupBox("Audio Input")
@@ -995,7 +1032,7 @@ class BloviateUI(QMainWindow):
             self.output_format_combo.addItem(value.title(), value)
         self._set_combo_data(self.output_format_combo, tx_cfg.get("output_format", "clipboard"))
         self.auto_paste_checkbox = QCheckBox("Auto-paste after transcription")
-        self.auto_paste_checkbox.setChecked(bool(tx_cfg.get("auto_paste", False)))
+        self.auto_paste_checkbox.setChecked(bool(tx_cfg.get("auto_paste", True)))
         self.use_dictionary_checkbox = QCheckBox("Apply dictionary corrections")
         self.use_dictionary_checkbox.setChecked(bool(tx_cfg.get("use_custom_dictionary", True)))
         self.noise_suppression_checkbox = QCheckBox("Enable noise suppression")
@@ -1093,8 +1130,13 @@ class BloviateUI(QMainWindow):
         for value in self._model_options().get("post_processing_modes", ["verbatim", "clean", "coding", "message"]):
             self.post_processing_mode_combo.addItem(cleanup_labels.get(value, value.title()), value)
         self._set_combo_data(self.post_processing_mode_combo, pp_cfg.get("mode", "verbatim"))
+        self.post_processing_mode_combo.setToolTip(
+            "Verbatim keeps model output as-is. Clean removes filler and normalizes prose. "
+            "Coding keeps code-like dictated text less rewritten. Message is concise prose, "
+            "and is most useful with OpenAI cleanup enabled."
+        )
         self.openai_cleanup_checkbox = QCheckBox("Use OpenAI cleanup when available")
-        self.openai_cleanup_checkbox.setChecked(bool(pp_cfg.get("openai_enabled", False)))
+        self.openai_cleanup_checkbox.setChecked(bool(pp_cfg.get("openai_enabled", True)))
         self.cleanup_model_combo = self._model_combo(
             "cleanup_models", pp_cfg.get("openai_model", "gpt-4o")
         )
@@ -1288,6 +1330,95 @@ class BloviateUI(QMainWindow):
         self.reset_defaults_button.clicked.connect(self._reset_defaults)
 
         layout.addStretch()
+
+    def _permission_statuses(self) -> dict:
+        if not self.get_permission_statuses:
+            return {}
+        try:
+            return self.get_permission_statuses() or {}
+        except Exception as exc:
+            return {
+                "error": {
+                    "label": "Permissions",
+                    "state": "missing",
+                    "detail": f"Could not check permissions: {exc}",
+                }
+            }
+
+    def _refresh_permissions(self):
+        if not hasattr(self, "permissions_status_label"):
+            return
+        statuses = self._permission_statuses()
+        if not statuses:
+            self.permissions_status_label.setText("Permission checks are unavailable on this platform.")
+            return
+
+        lines = []
+        all_ready = True
+        for key in ("microphone", "accessibility", "input_monitoring", "automation"):
+            status = statuses.get(key)
+            if not status:
+                continue
+            label = status.get("label", key.replace("_", " ").title())
+            state = status.get("state", "unknown")
+            detail = status.get("detail", "")
+            if state == "granted":
+                prefix = "OK"
+            elif state == "manual":
+                prefix = "Check"
+                all_ready = False
+            else:
+                prefix = "Needs setup"
+                all_ready = False
+            lines.append(f"{prefix}: {label}" + (f" - {detail}" if detail else ""))
+
+        if not lines:
+            lines.append("Permission checks are unavailable on this platform.")
+        self.permissions_status_label.setText("\n".join(lines))
+        self.permissions_status_label.setStyleSheet(
+            self._settings_ok_style if all_ready else self._settings_status_default_style
+        )
+
+    def _request_permission(self, kind: str):
+        if self.request_permission:
+            ok, message = self.request_permission(kind)
+            self._refresh_permissions()
+            self._set_settings_status(self.permissions_status_label, message, ok=ok)
+            return
+        if self.open_permission_settings:
+            ok, message = self.open_permission_settings(kind)
+            self._refresh_permissions()
+            self._set_settings_status(self.permissions_status_label, message, ok=ok)
+            return
+        self._set_settings_status(self.permissions_status_label, "Permission setup is unavailable.", ok=False)
+
+    def _maybe_show_permissions_prompt(self):
+        if self._permissions_prompt_shown:
+            return
+        prompt_cfg = self.config.get("ui", {}).get("permissions_prompt", {})
+        if not bool(prompt_cfg.get("enabled", True)):
+            return
+        statuses = self._permission_statuses()
+        missing = [
+            status
+            for status in statuses.values()
+            if status.get("state") in {"missing", "unknown"}
+        ]
+        if not missing:
+            return
+
+        self._permissions_prompt_shown = True
+        self.show_settings_tab()
+        self._refresh_permissions()
+        QMessageBox.information(
+            self,
+            "Bloviate Permissions",
+            (
+                "Bloviate needs microphone access for dictation, Accessibility/Input Monitoring "
+                "for global hotkeys, and Automation/Accessibility for auto-paste. "
+                "Use the Permissions section at the top of Settings to open each macOS prompt."
+            ),
+        )
 
     def _refresh_audio_inputs(self):
         """Reload the list of available audio inputs."""
@@ -2446,6 +2577,11 @@ class StartupSplash(QWidget):
         self._animation = None
         self._closed = False
         self._objc = None
+        self._cow_phase = 0
+        self._show_cows = bool(splash_cfg.get("show_cows", True))
+        self._cow_timer = QTimer(self)
+        self._cow_timer.setInterval(90)
+        self._cow_timer.timeout.connect(self._advance_cows)
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -2455,7 +2591,7 @@ class StartupSplash(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.resize(420, 190)
+        self.resize(540, 250)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 20, 20, 20)
@@ -2478,8 +2614,17 @@ class StartupSplash(QWidget):
         status.setObjectName("splashStatus")
         status.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        self.cow_label = QLabel(self._cow_runway_text())
+        self.cow_label.setObjectName("splashCows")
+        self.cow_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.cow_label.setMinimumHeight(54)
+        self.cow_label.setFont(QFont("Menlo", 11))
+
         card_layout.addWidget(title)
         card_layout.addWidget(subtitle)
+        if self._show_cows:
+            card_layout.addSpacing(4)
+            card_layout.addWidget(self.cow_label)
         card_layout.addSpacing(6)
         card_layout.addWidget(status)
         root.addWidget(card)
@@ -2487,28 +2632,57 @@ class StartupSplash(QWidget):
         self.setStyleSheet(
             """
             QFrame#splashCard {
-                background-color: rgba(24, 24, 24, 238);
-                border: 1px solid rgba(130, 130, 130, 80);
+                background-color: rgba(255, 253, 247, 246);
+                border: 1px solid rgba(216, 204, 186, 210);
                 border-radius: 16px;
             }
             QLabel#splashTitle {
-                color: #F0F0F0;
+                color: #26211D;
                 font-size: 28px;
                 font-weight: 800;
-                letter-spacing: 2px;
             }
             QLabel#splashSubtitle {
-                color: #CFCFCF;
+                color: #6F665E;
                 font-size: 13px;
                 font-weight: 500;
             }
+            QLabel#splashCows {
+                color: #2D6B6B;
+                font-size: 11px;
+                font-weight: 700;
+                background: #F7F3EA;
+                border: 1px solid #E4D9C8;
+                border-radius: 8px;
+                padding: 6px;
+            }
             QLabel#splashStatus {
-                color: #9FD7B2;
+                color: #2F7D4F;
                 font-size: 12px;
                 font-weight: 500;
             }
             """
         )
+
+    def _cow_runway_text(self) -> str:
+        width = 52
+        phase = self._cow_phase % width
+        lines = [" " * width, " " * width, " " * width]
+        cow = ["(__)", "(oo)", "/--\\"]
+        for offset in (0, 14, 29, 43):
+            x = (phase + offset) % width
+            for row, part in enumerate(cow):
+                line = lines[row]
+                if x + len(part) <= width:
+                    lines[row] = line[:x] + part + line[x + len(part):]
+                else:
+                    first = width - x
+                    lines[row] = part[first:] + line[len(part) - first:x] + part[:first]
+        return "\n".join(lines)
+
+    def _advance_cows(self):
+        self._cow_phase = (self._cow_phase + 2) % 52
+        if self._show_cows and hasattr(self, "cow_label"):
+            self.cow_label.setText(self._cow_runway_text())
 
     def _get_objc(self):
         """Lazily load Objective-C runtime handles (macOS only)."""
@@ -2574,6 +2748,8 @@ class StartupSplash(QWidget):
         self.activateWindow()
         QApplication.processEvents()
         self._force_front_macos()
+        if self._show_cows:
+            self._cow_timer.start()
         QTimer.singleShot(max(100, self.duration_ms), self.fade_out)
 
     def fade_out(self):
@@ -2588,6 +2764,7 @@ class StartupSplash(QWidget):
 
     def closeEvent(self, event):
         self._closed = True
+        self._cow_timer.stop()
         super().closeEvent(event)
 
 
@@ -2618,6 +2795,9 @@ def create_ui(
     export_history=None,
     run_doctor_text=None,
     reset_settings_to_defaults=None,
+    get_permission_statuses=None,
+    request_permission=None,
+    open_permission_settings=None,
     set_show_main_window_on_startup=None,
     set_startup_splash_enabled=None,
     set_terminal_startup_animation_enabled=None,
@@ -2657,6 +2837,9 @@ def create_ui(
         export_history=export_history,
         run_doctor_text=run_doctor_text,
         reset_settings_to_defaults=reset_settings_to_defaults,
+        get_permission_statuses=get_permission_statuses,
+        request_permission=request_permission,
+        open_permission_settings=open_permission_settings,
         set_show_main_window_on_startup=set_show_main_window_on_startup,
         set_startup_splash_enabled=set_startup_splash_enabled,
         set_terminal_startup_animation_enabled=set_terminal_startup_animation_enabled,

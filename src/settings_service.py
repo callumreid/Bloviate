@@ -129,9 +129,31 @@ def _config_section(data: dict, key: str) -> dict:
 
 def _migrate_config(data: dict) -> dict:
     """Apply small compatibility migrations for existing user configs."""
+    app_config = _config_section(data, "app")
+    try:
+        config_version = int(app_config.get("config_version", 0) or 0)
+    except (TypeError, ValueError):
+        config_version = 0
+    is_legacy_config = config_version < 4
+
     ui_config = _config_section(data, "ui")
     if str(ui_config.get("theme", "")).strip().lower() == "dark":
         ui_config["theme"] = "light"
+    window_size = ui_config.get("window_size")
+    width = height = 0
+    if isinstance(window_size, (list, tuple)) and len(window_size) >= 2:
+        try:
+            width = int(window_size[0])
+            height = int(window_size[1])
+        except (TypeError, ValueError):
+            width = height = 0
+    if width < 1000 or height < 720:
+        ui_config["window_size"] = [1180, 860]
+    splash_config = ui_config.setdefault("startup_splash", {})
+    splash_config.setdefault("enabled", True)
+    splash_config.setdefault("show_cows", True)
+    permissions_config = ui_config.setdefault("permissions_prompt", {})
+    permissions_config.setdefault("enabled", True)
     ptt_config = _config_section(data, "ptt")
     if not str(ptt_config.get("hotkey", "") or "").strip():
         ptt_config["hotkey"] = "<cmd>+<option>"
@@ -144,6 +166,17 @@ def _migrate_config(data: dict) -> dict:
         window_config["command_hotkey"] = "<ctrl>+<cmd>"
     history_config = _config_section(data, "history")
     history_config["enabled"] = bool(history_config.get("enabled", True))
+    transcription_config = _config_section(data, "transcription")
+    if is_legacy_config and not bool(transcription_config.get("auto_paste", False)):
+        transcription_config["auto_paste"] = True
+    post_processing_config = _config_section(data, "post_processing")
+    if is_legacy_config:
+        post_processing_config["openai_enabled"] = True
+    else:
+        post_processing_config["openai_enabled"] = bool(
+            post_processing_config.get("openai_enabled", True)
+        )
+    app_config["config_version"] = 4
     return data
 
 
@@ -167,6 +200,7 @@ def load_yaml_config(path: str | Path, *, allow_missing: bool = False) -> tuple[
     with open(resolved, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
+    data = _migrate_config(data)
     defaults = _load_packaged_defaults()
     if defaults:
         data = _deep_merge_missing(data, defaults)

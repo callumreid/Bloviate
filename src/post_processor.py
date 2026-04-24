@@ -103,9 +103,15 @@ class PostProcessor:
             "You clean up dictated text. Preserve meaning, names, identifiers, commands, "
             "and code-like tokens. Return only the final text."
         )
+        mode_guidance = {
+            "clean": "Make it polished prose. Remove filler words and obvious false starts.",
+            "coding": "Preserve symbols, identifiers, shell commands, filenames, and code-like casing.",
+            "message": "Make it read like a concise sent message while preserving the user's intent.",
+        }.get(mode, "Preserve the transcript exactly except for obvious transcription artifacts.")
         user = (
             f"Mode: {mode}\n"
             f"Target app: {target_app or 'unknown'}\n"
+            f"Guidance: {mode_guidance}\n"
             "Clean this transcript without adding new ideas:\n"
             f"{text}"
         )

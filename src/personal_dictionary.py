@@ -31,6 +31,7 @@ DEFAULT_PERSONAL_DICTIONARY_FILE = "personal_dictionary.yaml"
 DEFAULT_LEARNED_TERMS_FILE = "learned_terms.txt"
 DEFAULT_CUSTOM_DICTIONARY_FILE = "custom_dictionary.yaml"
 
+
 def _resolve_config_path(config: dict, config_key: str, env_name: str, default_file: str) -> Path:
     raw_path = config.get("transcription", {}).get(config_key) or os.getenv(env_name)
     if raw_path:
@@ -136,6 +137,45 @@ def _load_terms_txt(path: Path) -> List[str]:
             seen.add(key)
             terms.append(term)
     return terms
+
+
+def _legacy_project_dirs() -> List[Path]:
+    """Return possible development checkouts that predate App Support storage."""
+    candidates: List[Path] = []
+    env_dirs = os.getenv("BLOVIATE_LEGACY_PROJECT_DIRS", "")
+    for raw_dir in env_dirs.split(os.pathsep):
+        if raw_dir.strip():
+            candidates.append(Path(raw_dir).expanduser())
+
+    candidates.extend(
+        [
+            Path.cwd(),
+            Path.home() / "personal" / "bloviate",
+            Path.home() / "dev" / "bloviate",
+            Path.home() / "src" / "bloviate",
+            Path.home() / "Projects" / "bloviate",
+        ]
+    )
+
+    seen = set()
+    project_dirs: List[Path] = []
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+        except Exception:
+            continue
+        if resolved in seen or not resolved.is_dir():
+            continue
+        seen.add(resolved)
+        if resolved.name.lower() != "bloviate":
+            continue
+        if (
+            (resolved / "config.yaml").exists()
+            or (resolved / "pyproject.toml").exists()
+            or (resolved / ".git").exists()
+        ):
+            project_dirs.append(resolved)
+    return project_dirs
 
 
 def _extract_terms(data: dict) -> List[str]:
@@ -259,12 +299,71 @@ def load_personal_dictionary(config: dict) -> Dict[str, List]:
         if len(preferred_terms) > before:
             sources.append(str(repo_learned_path))
 
+    checked_paths = {
+        primary_path.resolve() if primary_path.exists() else primary_path,
+        legacy_custom_path.resolve() if legacy_custom_path.exists() else legacy_custom_path,
+        legacy_learned_path.resolve() if legacy_learned_path.exists() else legacy_learned_path,
+        repo_personal_path.resolve() if repo_personal_path.exists() else repo_personal_path,
+        repo_custom_path.resolve() if repo_custom_path.exists() else repo_custom_path,
+        repo_learned_path.resolve() if repo_learned_path.exists() else repo_learned_path,
+    }
+    for legacy_dir in _legacy_project_dirs():
+        for filename, loader in (
+            (DEFAULT_PERSONAL_DICTIONARY_FILE, "personal"),
+            (DEFAULT_CUSTOM_DICTIONARY_FILE, "custom"),
+            (DEFAULT_LEARNED_TERMS_FILE, "terms"),
+        ):
+            path = legacy_dir / filename
+            try:
+                resolved_path = path.resolve()
+            except Exception:
+                resolved_path = path
+            if resolved_path in checked_paths or not path.exists():
+                continue
+            checked_paths.add(resolved_path)
+            before_terms = len(preferred_terms)
+            before_corrections = len(corrections)
+            if loader == "terms":
+                for term in _load_terms_txt(path):
+                    add_term(term)
+            else:
+                data = _load_yaml(path)
+                if loader == "personal":
+                    for term in _extract_terms(data):
+                        add_term(term)
+                for correction in _extract_corrections(data):
+                    add_correction(correction)
+            if len(preferred_terms) > before_terms or len(corrections) > before_corrections:
+                sources.append(str(path))
+
     return {
         "preferred_terms": preferred_terms,
         "corrections": corrections,
         "sources": sources,
         "path": str(primary_path),
     }
+
+
+def migrate_legacy_personal_dictionary(config: dict) -> Tuple[Path, int, int, bool]:
+    """Copy loaded legacy dictionary data into the primary App Support file once."""
+    primary_path = resolve_personal_dictionary_path(config)
+    if primary_path.exists():
+        payload = load_personal_dictionary(config)
+        return (
+            primary_path,
+            len(payload.get("preferred_terms", [])),
+            len(payload.get("corrections", [])),
+            False,
+        )
+
+    payload = load_personal_dictionary(config)
+    preferred_terms = payload.get("preferred_terms", [])
+    corrections = payload.get("corrections", [])
+    if not preferred_terms and not corrections:
+        return primary_path, 0, 0, False
+
+    save_personal_dictionary(config, preferred_terms, corrections)
+    return primary_path, len(preferred_terms), len(corrections), True
 
 
 def add_preferred_terms(config: dict, terms: Iterable[str]) -> Tuple[Path, List[str]]:

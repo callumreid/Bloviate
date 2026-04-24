@@ -68,6 +68,7 @@ from app_paths import (
 from personal_dictionary import (
     add_preferred_terms,
     load_personal_dictionary,
+    migrate_legacy_personal_dictionary,
     resolve_personal_dictionary_path,
     save_personal_dictionary,
 )
@@ -333,11 +334,54 @@ def init_personal_dictionary(config: Optional[dict] = None, *, force: bool = Fal
     if path.exists() and not force:
         print(f"Personal dictionary already exists: {path}")
         return 0
+    if not force:
+        migrated_path, terms, corrections, migrated = migrate_legacy_personal_dictionary(config)
+        if migrated:
+            print(
+                f"Imported existing dictionary into {migrated_path} "
+                f"({terms} term(s), {corrections} replacement(s))."
+            )
+            return 0
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(read_resource_text("personal_dictionary.example.yaml"), encoding="utf-8")
     print(f"Initialized personal dictionary: {path}")
     return 0
+
+
+def _open_macos_privacy_pane(kind: str) -> tuple[bool, str]:
+    if sys.platform != "darwin":
+        return False, "macOS permission panes are only available on macOS."
+
+    urls = {
+        "microphone": "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        "accessibility": "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        "input_monitoring": "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+        "automation": "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+    }
+    url = urls.get(kind, "x-apple.systempreferences:com.apple.preference.security?Privacy")
+    try:
+        subprocess.Popen(["open", url])
+        return True, f"Opened macOS {kind.replace('_', ' ')} permission settings."
+    except Exception as exc:
+        return False, f"Could not open macOS permission settings: {exc}"
+
+
+def _macos_accessibility_trusted() -> bool:
+    if sys.platform != "darwin":
+        return True
+    try:
+        import ctypes
+        import ctypes.util
+
+        path = ctypes.util.find_library("ApplicationServices")
+        if not path:
+            return False
+        app_services = ctypes.cdll.LoadLibrary(path)
+        app_services.AXIsProcessTrusted.restype = ctypes.c_bool
+        return bool(app_services.AXIsProcessTrusted())
+    except Exception:
+        return False
 
 
 def run_doctor(config_path: str) -> int:
@@ -465,18 +509,31 @@ def run_doctor(config_path: str) -> int:
     if personal_dictionary_path.exists():
         _doctor_line("OK", "Personal Dictionary", str(personal_dictionary_path))
     else:
-        warnings += 1
-        _doctor_line(
-            "WARN",
-            "Personal Dictionary",
-            (
-                f"File not found at {personal_dictionary_path}. "
-                f"Run `{_cli_invocation()} --init-personal-dictionary` if you want local vocabulary biasing."
-            ),
-        )
+        legacy_payload = load_personal_dictionary(config)
+        legacy_terms = len(legacy_payload.get("preferred_terms", []))
+        legacy_corrections = len(legacy_payload.get("corrections", []))
+        if legacy_terms or legacy_corrections:
+            _doctor_line(
+                "OK",
+                "Personal Dictionary",
+                (
+                    f"Found legacy dictionary source(s): {legacy_terms} term(s), "
+                    f"{legacy_corrections} replacement(s). Bloviate will import them on launch."
+                ),
+            )
+        else:
+            warnings += 1
+            _doctor_line(
+                "WARN",
+                "Personal Dictionary",
+                (
+                    f"File not found at {personal_dictionary_path}. "
+                    f"Run `{_cli_invocation()} --init-personal-dictionary` if you want local vocabulary biasing."
+                ),
+            )
 
     output_format = str(config.get("transcription", {}).get("output_format", "clipboard"))
-    auto_paste = bool(config.get("transcription", {}).get("auto_paste", False))
+    auto_paste = bool(config.get("transcription", {}).get("auto_paste", True))
     window_management_enabled = bool(config.get("window_management", {}).get("enabled", False))
     is_macos = sys.platform == "darwin"
 
@@ -547,6 +604,15 @@ class Bloviate:
         self.post_processor = PostProcessor(self.config, secret_store=self.secret_store)
         self.verbose_logs = _is_verbose_logging_enabled(self.config)
         self._quiet_startup = not self.verbose_logs
+        try:
+            dictionary_path, terms, corrections, migrated = migrate_legacy_personal_dictionary(self.config)
+            if migrated and self.verbose_logs:
+                print(
+                    f"[Dictionary] Imported {terms} term(s), {corrections} replacement(s) "
+                    f"to {dictionary_path}"
+                )
+        except Exception as exc:
+            print(f"[Dictionary] Legacy dictionary migration skipped: {exc}")
 
         self.voice_mode = self._resolve_voice_mode(voice_mode_override)
         self.talk_mode = self.voice_mode == "talk"
@@ -905,6 +971,74 @@ class Bloviate:
             exit_code = run_doctor(str(config_path))
         return exit_code == 0, buffer.getvalue()
 
+    def get_permission_statuses(self) -> dict:
+        """Return macOS permission status for the Settings first-run checklist."""
+        if sys.platform != "darwin":
+            return {
+                "platform": {
+                    "label": "Platform permissions",
+                    "state": "unsupported",
+                    "detail": "macOS permission checks are not required here.",
+                }
+            }
+
+        microphone_state = "granted" if getattr(self.audio_capture, "stream", None) is not None else "unknown"
+        microphone_detail = (
+            "Audio stream is running."
+            if microphone_state == "granted"
+            else "Click Request Microphone to trigger the macOS microphone prompt."
+        )
+        accessibility_granted = _macos_accessibility_trusted()
+        auto_paste = bool(self.config.get("transcription", {}).get("auto_paste", True))
+
+        return {
+            "microphone": {
+                "label": "Microphone",
+                "state": microphone_state,
+                "detail": microphone_detail,
+            },
+            "accessibility": {
+                "label": "Accessibility",
+                "state": "granted" if accessibility_granted else "missing",
+                "detail": "Required for global hotkeys and simulated paste.",
+            },
+            "input_monitoring": {
+                "label": "Input Monitoring",
+                "state": "manual",
+                "detail": "Required by macOS for reliable global hotkey capture.",
+            },
+            "automation": {
+                "label": "Automation",
+                "state": "manual" if auto_paste else "unsupported",
+                "detail": "Required for AppleScript paste when auto-paste is enabled.",
+            },
+        }
+
+    def request_permission(self, kind: str) -> tuple[bool, str]:
+        """Trigger the relevant macOS permission prompt or open its Settings pane."""
+        normalized = str(kind or "").strip().lower()
+        if sys.platform != "darwin":
+            return True, "No macOS permissions are required on this platform."
+
+        if normalized == "microphone":
+            try:
+                self.audio_capture.start()
+                return True, "Microphone permission is ready; audio capture started."
+            except Exception as exc:
+                _open_macos_privacy_pane("microphone")
+                return False, f"Microphone access is not ready: {exc}"
+
+        if normalized == "accessibility":
+            if _macos_accessibility_trusted():
+                return True, "Accessibility permission is already granted."
+            _open_macos_privacy_pane("accessibility")
+            return True, "Opened Accessibility settings. Enable Bloviate, then return and refresh."
+
+        if normalized in {"input_monitoring", "automation"}:
+            return _open_macos_privacy_pane(normalized)
+
+        return _open_macos_privacy_pane("privacy")
+
     def reset_settings_to_defaults(self) -> tuple[bool, str]:
         """Reset YAML config to packaged defaults while preserving runtime metadata."""
         try:
@@ -935,7 +1069,7 @@ class Bloviate:
             ) or "whisper"
             self.transcriber.language = tx_cfg.get("language", self.transcriber.language)
             self.transcriber.output_format = tx_cfg.get("output_format", "clipboard")
-            self.transcriber.auto_paste = bool(tx_cfg.get("auto_paste", False))
+            self.transcriber.auto_paste = bool(tx_cfg.get("auto_paste", True))
             self.transcriber.use_custom_dictionary = bool(tx_cfg.get("use_custom_dictionary", True))
             self.transcriber.deepgram_config = self.config.get("deepgram", {})
             self.transcriber.openai_config = self.config.get("openai", {})
@@ -1696,6 +1830,9 @@ class Bloviate:
             export_history=self.export_history,
             run_doctor_text=self.run_doctor_text,
             reset_settings_to_defaults=self.reset_settings_to_defaults,
+            get_permission_statuses=self.get_permission_statuses,
+            request_permission=self.request_permission,
+            open_permission_settings=self.request_permission,
             set_show_main_window_on_startup=self.set_show_main_window_on_startup,
             set_startup_splash_enabled=self.set_startup_splash_enabled,
             set_terminal_startup_animation_enabled=self.set_terminal_startup_animation_enabled,
@@ -1703,15 +1840,24 @@ class Bloviate:
         if self.talk_mode and self.ui_window:
             self.ui_window.signals.update_voice_match.emit(True, -1.0)
 
-        # Start audio capture
-        self.audio_capture.start()
         self.audio_capture.register_callback(self.audio_callback)
+        try:
+            self.audio_capture.start()
+        except Exception as exc:
+            print(f"[Permissions] Audio capture could not start yet: {exc}")
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit("Microphone permission needed")
 
         # Start PTT handler
-        self.ptt_handler.start(
-            on_press=self.on_ptt_press,
-            on_release=self.on_ptt_release
-        )
+        try:
+            self.ptt_handler.start(
+                on_press=self.on_ptt_press,
+                on_release=self.on_ptt_release
+            )
+        except Exception as exc:
+            print(f"[Permissions] Global hotkeys could not start yet: {exc}")
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit("Hotkey permission needed")
 
         # Add window management hotkeys if enabled
         if self.window_manager:
@@ -1796,6 +1942,11 @@ def install_macos_launcher() -> int:
     executable = macos_dir / "Bloviate"
     launch_script = f"""#!/bin/zsh
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+for rc in "$HOME/.zshenv" "$HOME/.zprofile"; do
+  if [ -r "$rc" ]; then
+    source "$rc" >/dev/null 2>&1
+  fi
+done
 exec {shlex.quote(str(command_path))} "$@"
 """
     executable.write_text(launch_script, encoding="utf-8")
