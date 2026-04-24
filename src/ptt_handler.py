@@ -6,6 +6,7 @@ Manages global keyboard shortcuts for activating dictation.
 from pynput import keyboard
 from typing import Callable, Optional, Dict
 import threading
+import time
 
 
 class PTTHandler:
@@ -29,6 +30,9 @@ class PTTHandler:
         # Additional hotkeys with their callbacks
         self.additional_hotkeys: Dict[str, dict] = {}
         self.active_hotkeys = set()
+        self.tap_sequences: Dict[str, dict] = {}
+        self._tap_candidate_key: Optional[str] = None
+        self._tap_chord_detected = False
 
         # Parse PTT hotkeys
         self.hotkey_strs = []
@@ -207,8 +211,63 @@ class PTTHandler:
         if self.verbose_logs:
             print(f"Added hotkey '{name}': {hotkey_str}")
 
+    def add_tap_sequence(
+        self,
+        name: str,
+        key_str: str,
+        count: int,
+        max_interval_s: float,
+        callback: Callable,
+    ):
+        """Run a callback when one key is tapped repeatedly in quick succession."""
+        key_set = self._parse_hotkey(key_str)
+        key_names = self._key_set(key_set)
+        if len(key_names) != 1:
+            if self.verbose_logs:
+                print(f"Warning: tap sequence '{name}' needs exactly one key: {key_str}")
+            return
+        self.tap_sequences[name] = {
+            "key": next(iter(key_names)),
+            "count": max(2, int(count)),
+            "max_interval_s": max(0.1, float(max_interval_s)),
+            "callback": callback,
+            "current_count": 0,
+            "last_tap": 0.0,
+        }
+
+    def _handle_tap_release(self, key):
+        released_name = self._normalize_key(key)
+        if (
+            not released_name
+            or self.current_keys
+            or self._tap_chord_detected
+            or self._tap_candidate_key != released_name
+        ):
+            return
+        now = time.monotonic()
+        for sequence in self.tap_sequences.values():
+            if sequence["key"] != released_name:
+                continue
+            if now - sequence["last_tap"] <= sequence["max_interval_s"]:
+                sequence["current_count"] += 1
+            else:
+                sequence["current_count"] = 1
+            sequence["last_tap"] = now
+            if sequence["current_count"] >= sequence["count"]:
+                sequence["current_count"] = 0
+                sequence["last_tap"] = 0.0
+                callback = sequence.get("callback")
+                if callback:
+                    callback()
+
     def _on_press(self, key):
         """Handle key press events."""
+        pressed_name = self._normalize_key(key)
+        if not self.current_keys:
+            self._tap_candidate_key = pressed_name
+            self._tap_chord_detected = False
+        elif pressed_name != self._tap_candidate_key:
+            self._tap_chord_detected = True
         self.current_keys.add(key)
 
         consumed = False
@@ -269,6 +328,11 @@ class PTTHandler:
                 if hotkey_info['on_release']:
                     hotkey_info['on_release']()
 
+        self._handle_tap_release(key)
+        if not self.current_keys:
+            self._tap_candidate_key = None
+            self._tap_chord_detected = False
+
     def start(self, on_press: Callable, on_release: Callable):
         """
         Start listening for the PTT hotkey.
@@ -304,6 +368,11 @@ class PTTHandler:
         self.active_hotkeys.clear()
         for hotkey_info in self.additional_hotkeys.values():
             hotkey_info['is_active'] = False
+        for sequence in self.tap_sequences.values():
+            sequence["current_count"] = 0
+            sequence["last_tap"] = 0.0
+        self._tap_candidate_key = None
+        self._tap_chord_detected = False
 
         if listener:
             listener.stop()

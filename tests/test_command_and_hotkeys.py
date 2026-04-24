@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -17,6 +18,7 @@ if str(SRC_ROOT) not in sys.path:
 import main
 from post_processor import ProcessedTranscript
 from ptt_handler import PTTHandler
+from settings_service import SettingsService
 
 
 class FakeListener:
@@ -95,6 +97,61 @@ class CommandAndHotkeyTests(unittest.TestCase):
 
         self.assertEqual(events, ["toggle"])
         handler.stop()
+
+    def test_command_triple_tap_sequence_triggers_callback(self):
+        handler = PTTHandler({"ptt": {"hotkey": "<cmd>+<option>"}})
+        events = []
+        handler.add_tap_sequence(
+            "cycle_cleanup_mode",
+            "<cmd>",
+            count=3,
+            max_interval_s=0.65,
+            callback=lambda: events.append("cycle"),
+        )
+
+        for _ in range(3):
+            handler._on_press(keyboard.Key.cmd)
+            handler._on_release(keyboard.Key.cmd)
+
+        self.assertEqual(events, ["cycle"])
+
+    def test_command_tap_sequence_ignores_chords(self):
+        handler = PTTHandler({"ptt": {"hotkey": "<cmd>+<option>"}})
+        events = []
+        handler.add_tap_sequence(
+            "cycle_cleanup_mode",
+            "<cmd>",
+            count=3,
+            max_interval_s=0.65,
+            callback=lambda: events.append("cycle"),
+        )
+
+        for _ in range(3):
+            handler._on_press(keyboard.Key.cmd)
+            handler._on_press(keyboard.Key.alt)
+            handler._on_release(keyboard.Key.alt)
+            handler._on_release(keyboard.Key.cmd)
+
+        self.assertEqual(events, [])
+
+    def test_cycle_post_processing_mode_persists_next_mode(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            app = main.Bloviate.__new__(main.Bloviate)
+            app.config = {
+                "__config_path__": str(Path(tempdir) / "config.yaml"),
+                "post_processing": {"mode": "coding"},
+            }
+            app.settings_service = SettingsService(app.config)
+            app.model_registry = main.ModelRegistry()
+            app.verbose_logs = False
+            app.ui_window = None
+            app._refresh_runtime_config_views = lambda: None
+
+            ok, message = app.cycle_post_processing_mode()
+
+            self.assertTrue(ok, message)
+            self.assertEqual(app.config["post_processing"]["mode"], "message")
+            self.assertIn("Message", message)
 
     def test_rejected_voice_is_saved_to_history_without_output(self):
         app = main.Bloviate.__new__(main.Bloviate)

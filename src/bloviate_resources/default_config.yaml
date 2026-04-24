@@ -2,7 +2,7 @@
 
 # App Presentation / Logging
 app:
-  config_version: 5
+  config_version: 6
   verbose_logs: false  # Developer mode: show full startup/runtime internals in terminal output
   suppress_third_party_warnings: true  # Hide noisy library warnings during normal startup
   startup_animation: false  # Show a short ASCII startup animation in interactive terminals
@@ -22,6 +22,9 @@ ptt:
   hotkey: "<cmd>+<option>"
   secondary_hotkey: "<fn>"  # Optional secondary PTT hotkey
   toggle_hotkey: "<cmd>+<option>+<shift>"  # Toggle dictation on/off without holding keys
+  mode_cycle_tap_key: "<cmd>"  # Tap quickly to cycle output cleanup mode
+  mode_cycle_tap_count: 3
+  mode_cycle_tap_window_ms: 650
 
 # Window Management Settings
 window_management:

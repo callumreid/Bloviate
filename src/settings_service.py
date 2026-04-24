@@ -134,7 +134,7 @@ def _migrate_config(data: dict) -> dict:
         config_version = int(app_config.get("config_version", 0) or 0)
     except (TypeError, ValueError):
         config_version = 0
-    is_legacy_config = config_version < 5
+    is_legacy_config = config_version < 6
 
     ui_config = _config_section(data, "ui")
     if str(ui_config.get("theme", "")).strip().lower() == "dark":
@@ -161,6 +161,19 @@ def _migrate_config(data: dict) -> dict:
         ptt_config["secondary_hotkey"] = "<fn>"
     if not str(ptt_config.get("toggle_hotkey", "") or "").strip():
         ptt_config["toggle_hotkey"] = "<cmd>+<option>+<shift>"
+    if not str(ptt_config.get("mode_cycle_tap_key", "") or "").strip():
+        ptt_config["mode_cycle_tap_key"] = "<cmd>"
+    try:
+        ptt_config["mode_cycle_tap_count"] = max(2, int(ptt_config.get("mode_cycle_tap_count", 3)))
+    except (TypeError, ValueError):
+        ptt_config["mode_cycle_tap_count"] = 3
+    try:
+        ptt_config["mode_cycle_tap_window_ms"] = max(
+            200,
+            int(ptt_config.get("mode_cycle_tap_window_ms", 650)),
+        )
+    except (TypeError, ValueError):
+        ptt_config["mode_cycle_tap_window_ms"] = 650
     window_config = _config_section(data, "window_management")
     if is_legacy_config:
         window_config["enabled"] = True
@@ -183,7 +196,7 @@ def _migrate_config(data: dict) -> dict:
         post_processing_config["openai_enabled"] = bool(
             post_processing_config.get("openai_enabled", True)
         )
-    app_config["config_version"] = 5
+    app_config["config_version"] = 6
     return data
 
 

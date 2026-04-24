@@ -27,6 +27,7 @@ class UISignals(QObject):
     update_interim_transcription = pyqtSignal(str)
     update_status = pyqtSignal(str)
     update_command_status = pyqtSignal(str, str)
+    update_cleanup_mode = pyqtSignal(str, str)
 
 
 class MenuBarIndicator:
@@ -348,12 +349,20 @@ class BottomOverlayIndicator(QWidget):
     """Bottom-center overlay mirroring the menu bar equalizer icon."""
 
     _SIZE = 48  # Points — visible on screen while still compact
+    _MESSAGE_WIDTH = 154
     _BAR_COUNT = 5
     _GAP = 3
     _MARGIN = 6
     _PROFILE = [0.35, 0.6, 0.9, 0.6, 0.35]
     _MIN_BAR_HEIGHT = 0.12
     _BAR_RADIUS = 2
+    _PROCESSING_COLORS = [
+        QColor("#E7C873"),
+        QColor("#8E5CF7"),
+        QColor("#2D6B6B"),
+        QColor("#2F7D4F"),
+        QColor("#C58C2A"),
+    ]
 
     def __init__(self, config: dict):
         super().__init__(None)
@@ -361,13 +370,19 @@ class BottomOverlayIndicator(QWidget):
         self.audio_level = 0.0
         self.current_state = "idle"
         self._pulse_phase = False
+        self._processing_phase = 0
         self._hold_state = None
+        self._message_text = ""
+        self._message_state = ""
         self._pulse_timer = QTimer(self)
-        self._pulse_timer.setInterval(320)
+        self._pulse_timer.setInterval(85)
         self._pulse_timer.timeout.connect(self._toggle_pulse)
         self._hold_timer = QTimer(self)
         self._hold_timer.setSingleShot(True)
         self._hold_timer.timeout.connect(self._clear_hold_and_idle)
+        self._message_timer = QTimer(self)
+        self._message_timer.setSingleShot(True)
+        self._message_timer.timeout.connect(self._clear_message)
 
         overlay_cfg = self.config.get("ui", {}).get("ptt_overlay", {})
         self._screen_margin = int(overlay_cfg.get("margin", 20))
@@ -497,10 +512,12 @@ class BottomOverlayIndicator(QWidget):
         self._visibility_timer.stop()
         self._pulse_timer.stop()
         self._hold_timer.stop()
+        self._message_timer.stop()
         super().close()
 
     def _toggle_pulse(self):
         self._pulse_phase = not self._pulse_phase
+        self._processing_phase = (self._processing_phase + 1) % 1000
         if self.current_state in {"processing", "command_processing"}:
             self.update()
 
@@ -521,12 +538,32 @@ class BottomOverlayIndicator(QWidget):
             self._hold_state = None
             self.set_idle()
 
+    def _set_overlay_width(self, width: int):
+        if self.width() == width:
+            return
+        self.setFixedSize(width, self._SIZE)
+        self._position_bottom_center()
+
+    def _clear_message(self):
+        self._message_text = ""
+        self._message_state = ""
+        self._set_overlay_width(self._SIZE)
+        self.update()
+
+    def show_message(self, text: str, state: str = "mode", hold_ms: int = 1800):
+        self._message_text = str(text or "").strip()
+        self._message_state = str(state or "mode").strip()
+        if self._message_text:
+            self._set_overlay_width(self._MESSAGE_WIDTH)
+            self._message_timer.start(max(500, int(hold_ms)))
+        self.update()
+
     def _position_bottom_center(self):
         screen = QApplication.primaryScreen()
         if not screen:
             return
         geo = screen.availableGeometry()
-        x = geo.x() + int((geo.width() - self._SIZE) / 2)
+        x = geo.x() + int((geo.width() - self.width()) / 2)
         y = geo.y() + geo.height() - self._SIZE - self._screen_margin
         self.move(x, y)
 
@@ -549,6 +586,7 @@ class BottomOverlayIndicator(QWidget):
 
     def set_recording(self):
         self._clear_hold()
+        self._clear_message()
         self.current_state = "recording"
         self._stop_pulse()
         self.update()
@@ -556,11 +594,13 @@ class BottomOverlayIndicator(QWidget):
     def set_processing(self):
         self._clear_hold()
         self.current_state = "processing"
+        self._processing_phase = 0
         self._start_pulse()
         self.update()
 
     def set_command_recording(self):
         self._clear_hold()
+        self._clear_message()
         self.current_state = "command_recording"
         self._stop_pulse()
         self.update()
@@ -568,6 +608,7 @@ class BottomOverlayIndicator(QWidget):
     def set_command_processing(self):
         self._clear_hold()
         self.current_state = "command_processing"
+        self._processing_phase = 0
         self._start_pulse()
         self.update()
 
@@ -621,18 +662,42 @@ class BottomOverlayIndicator(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
 
         # Equalizer bars only — no background
-        painter.setBrush(self._state_color())
+        has_message = bool(self._message_text)
+        if has_message:
+            painter.setBrush(QColor(255, 253, 247, 236))
+            painter.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
+
         level = max(0.0, min(self.audio_level, 1.0))
-        usable_w = self._SIZE - self._MARGIN * 2
+        meter_w = self._SIZE
+        usable_w = meter_w - self._MARGIN * 2
         usable_h = self._SIZE - self._MARGIN * 2
         bar_w = int((usable_w - self._GAP * (self._BAR_COUNT - 1)) / self._BAR_COUNT)
 
         for idx, base in enumerate(self._PROFILE):
-            height_ratio = self._MIN_BAR_HEIGHT + (base - self._MIN_BAR_HEIGHT) * level
+            if self.current_state in {"processing", "command_processing"}:
+                cycle_len = self._BAR_COUNT + 3
+                head = self._processing_phase % cycle_len
+                trail = head - idx
+                wave = 1.0 - trail * 0.24 if 0 <= trail <= 3 else 0.10
+                height_ratio = self._MIN_BAR_HEIGHT + (0.95 - self._MIN_BAR_HEIGHT) * wave
+                color = self._PROCESSING_COLORS[(self._processing_phase + idx) % len(self._PROCESSING_COLORS)]
+                painter.setBrush(color)
+            else:
+                height_ratio = self._MIN_BAR_HEIGHT + (base - self._MIN_BAR_HEIGHT) * level
+                painter.setBrush(self._state_color())
             h = int(usable_h * height_ratio)
             x = self._MARGIN + idx * (bar_w + self._GAP)
             y = self._MARGIN + (usable_h - h)
             painter.drawRoundedRect(x, y, bar_w, h, self._BAR_RADIUS, self._BAR_RADIUS)
+
+        if has_message:
+            painter.setPen(QColor("#26211D"))
+            font = QFont()
+            font.setPointSize(10)
+            font.setBold(True)
+            painter.setFont(font)
+            text_rect = self.rect().adjusted(self._SIZE + 4, 5, -8, -5)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self._message_text)
 
         painter.end()
 
@@ -794,6 +859,7 @@ class BloviateUI(QMainWindow):
         self.signals.update_interim_transcription.connect(self._update_interim_transcription)
         self.signals.update_status.connect(self._update_status)
         self.signals.update_command_status.connect(self._update_command_status)
+        self.signals.update_cleanup_mode.connect(self._update_cleanup_mode_from_runtime)
 
         self._last_final_text = ""
         self._transcription_style_final = ""
@@ -999,6 +1065,13 @@ class BloviateUI(QMainWindow):
         self.ptt_toggle_hotkey_edit = QLineEdit(
             self._config_text("ptt", "toggle_hotkey", "<cmd>+<option>+<shift>")
         )
+        self.mode_cycle_tap_key_edit = QLineEdit(self._config_text("ptt", "mode_cycle_tap_key", "<cmd>"))
+        self.mode_cycle_tap_count_edit = QLineEdit(
+            str(self.config.get("ptt", {}).get("mode_cycle_tap_count", 3))
+        )
+        self.mode_cycle_tap_window_edit = QLineEdit(
+            str(self.config.get("ptt", {}).get("mode_cycle_tap_window_ms", 650))
+        )
         self.command_hotkey_edit = QLineEdit(
             self._config_text("window_management", "command_hotkey", "<ctrl>+<cmd>")
         )
@@ -1016,6 +1089,9 @@ class BloviateUI(QMainWindow):
             self.ptt_hotkey_edit: "<cmd>+<option>",
             self.ptt_secondary_hotkey_edit: "<fn>",
             self.ptt_toggle_hotkey_edit: "<cmd>+<option>+<shift>",
+            self.mode_cycle_tap_key_edit: "<cmd>",
+            self.mode_cycle_tap_count_edit: "3",
+            self.mode_cycle_tap_window_edit: "650",
             self.command_hotkey_edit: "<ctrl>+<cmd>",
             self.window_prefix_hotkey_edit: "<ctrl>+<cmd>",
             self.voice_command_prefixes_edit: "run command, screen, window, desktop",
@@ -1026,6 +1102,9 @@ class BloviateUI(QMainWindow):
         hotkey_layout.addRow("Primary PTT:", self.ptt_hotkey_edit)
         hotkey_layout.addRow("Secondary PTT:", self.ptt_secondary_hotkey_edit)
         hotkey_layout.addRow("Toggle PTT:", self.ptt_toggle_hotkey_edit)
+        hotkey_layout.addRow("Mode tap key:", self.mode_cycle_tap_key_edit)
+        hotkey_layout.addRow("Mode tap count:", self.mode_cycle_tap_count_edit)
+        hotkey_layout.addRow("Mode tap window ms:", self.mode_cycle_tap_window_edit)
         hotkey_layout.addRow("Command PTT:", self.command_hotkey_edit)
         hotkey_layout.addRow("Window prefix:", self.window_prefix_hotkey_edit)
         hotkey_layout.addRow("Voice prefixes:", self.voice_command_prefixes_edit)
@@ -1619,10 +1698,23 @@ class BloviateUI(QMainWindow):
             for part in self.voice_command_prefixes_edit.text().split(",")
             if part.strip()
         ]
+        try:
+            mode_tap_count = max(2, int(self.mode_cycle_tap_count_edit.text().strip()))
+            mode_tap_window_ms = max(200, int(self.mode_cycle_tap_window_edit.text().strip()))
+        except ValueError:
+            self._set_settings_status(
+                self.hotkey_status_label,
+                "Mode tap count and window must be whole numbers.",
+                ok=False,
+            )
+            return
         updates = {
             "ptt.hotkey": self.ptt_hotkey_edit.text().strip(),
             "ptt.secondary_hotkey": self.ptt_secondary_hotkey_edit.text().strip(),
             "ptt.toggle_hotkey": self.ptt_toggle_hotkey_edit.text().strip(),
+            "ptt.mode_cycle_tap_key": self.mode_cycle_tap_key_edit.text().strip(),
+            "ptt.mode_cycle_tap_count": mode_tap_count,
+            "ptt.mode_cycle_tap_window_ms": mode_tap_window_ms,
             "window_management.command_hotkey": self.command_hotkey_edit.text().strip(),
             "window_management.hotkey_prefix": self.window_prefix_hotkey_edit.text().strip(),
             "window_management.voice_command_prefixes": voice_prefixes,
@@ -1635,6 +1727,11 @@ class BloviateUI(QMainWindow):
             self.config.setdefault("ptt", {})["hotkey"] = updates["ptt.hotkey"]
             self.config.setdefault("ptt", {})["secondary_hotkey"] = updates["ptt.secondary_hotkey"]
             self.config.setdefault("ptt", {})["toggle_hotkey"] = updates["ptt.toggle_hotkey"]
+            self.config.setdefault("ptt", {})["mode_cycle_tap_key"] = updates["ptt.mode_cycle_tap_key"]
+            self.config.setdefault("ptt", {})["mode_cycle_tap_count"] = updates["ptt.mode_cycle_tap_count"]
+            self.config.setdefault("ptt", {})["mode_cycle_tap_window_ms"] = updates[
+                "ptt.mode_cycle_tap_window_ms"
+            ]
             self.config.setdefault("window_management", {})["command_hotkey"] = updates[
                 "window_management.command_hotkey"
             ]
@@ -1780,6 +1877,19 @@ class BloviateUI(QMainWindow):
             pp_cfg["openai_enabled"] = updates["post_processing.openai_enabled"]
             pp_cfg["openai_model"] = updates["post_processing.openai_model"]
         self._set_settings_status(self.cleanup_status_label, message, ok=ok)
+
+    def _update_cleanup_mode_from_runtime(self, mode: str, label: str):
+        """Reflect a cleanup-mode change triggered outside Settings."""
+        mode = str(mode or "").strip()
+        label = str(label or mode.title()).strip()
+        self.config.setdefault("post_processing", {})["mode"] = mode
+        if hasattr(self, "post_processing_mode_combo"):
+            with QSignalBlocker(self.post_processing_mode_combo):
+                self._set_combo_data(self.post_processing_mode_combo, mode)
+        if hasattr(self, "cleanup_status_label"):
+            self._set_settings_status(self.cleanup_status_label, f"Cleanup mode: {label}", ok=True)
+        if self.ptt_overlay:
+            self.ptt_overlay.show_message(label.upper(), state="mode")
 
     def _set_settings_status(self, label: QLabel, message: str, ok: bool = True):
         label.setText(message)

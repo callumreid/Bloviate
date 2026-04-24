@@ -7,6 +7,7 @@ Bloviate is a macOS-first voice dictation app for whispering in noisy spaces. It
 - Verifies your enrolled voice before transcribing in whisper mode
 - Supports talk mode when you want normal dictation without speaker verification
 - Supports hold-to-talk and toggle-to-talk; `Cmd+Option+Shift` toggles dictation by default
+- Cycles cleanup mode with three quick `Command` taps and shows the selected mode in the bottom overlay
 - Runs window commands from phrases like `screen left half` or `run command desktop right`
 - Uses Deepgram for live interim text, OpenAI or Deepgram for final text, and local Whisper as fallback
 - Lets you configure audio input, hotkeys, models, providers, API keys, dictionary, cleanup, history, startup behavior, and diagnostics from Settings
@@ -124,6 +125,8 @@ Older repo-local `custom_dictionary.yaml`, `personal_dictionary.yaml`, and `lear
 - Clean prose: removes common filler and normalizes sentences.
 - Coding: avoids prose rewrites that would damage commands, filenames, or identifiers.
 - Message: formats dictated text like a concise message; it differs most when OpenAI cleanup is enabled.
+
+Tap `Command` three times quickly to cycle these modes without opening Settings. The bottom waveform overlay briefly expands to show the new mode.
 
 ## Local History
 

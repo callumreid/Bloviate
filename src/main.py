@@ -917,6 +917,9 @@ class Bloviate:
             "hotkey": self.config.get("ptt", {}).get("hotkey"),
             "secondary_hotkey": self.config.get("ptt", {}).get("secondary_hotkey"),
             "toggle_hotkey": self.config.get("ptt", {}).get("toggle_hotkey"),
+            "mode_cycle_tap_key": self.config.get("ptt", {}).get("mode_cycle_tap_key"),
+            "mode_cycle_tap_count": self.config.get("ptt", {}).get("mode_cycle_tap_count"),
+            "mode_cycle_tap_window_ms": self.config.get("ptt", {}).get("mode_cycle_tap_window_ms"),
             "command_hotkey": self.config.get("window_management", {}).get("command_hotkey"),
             "hotkey_prefix": self.config.get("window_management", {}).get("hotkey_prefix"),
             "voice_command_prefixes": self.config.get("window_management", {}).get("voice_command_prefixes"),
@@ -932,6 +935,11 @@ class Bloviate:
             self.config.setdefault("ptt", {})["hotkey"] = old_config["hotkey"]
             self.config.setdefault("ptt", {})["secondary_hotkey"] = old_config["secondary_hotkey"]
             self.config.setdefault("ptt", {})["toggle_hotkey"] = old_config["toggle_hotkey"]
+            self.config.setdefault("ptt", {})["mode_cycle_tap_key"] = old_config["mode_cycle_tap_key"]
+            self.config.setdefault("ptt", {})["mode_cycle_tap_count"] = old_config["mode_cycle_tap_count"]
+            self.config.setdefault("ptt", {})["mode_cycle_tap_window_ms"] = old_config[
+                "mode_cycle_tap_window_ms"
+            ]
             self.config.setdefault("window_management", {})["command_hotkey"] = old_config["command_hotkey"]
             self.config.setdefault("window_management", {})["hotkey_prefix"] = old_config["hotkey_prefix"]
             self.config.setdefault("window_management", {})["voice_command_prefixes"] = old_config[
@@ -948,6 +956,7 @@ class Bloviate:
                 print(f"Error stopping old PTT handler: {exc}")
         self.ptt_handler = candidate
         self._setup_toggle_hotkey()
+        self._setup_mode_cycle_tap()
         if listener_was_running:
             self.ptt_handler.start(
                 on_press=self.on_ptt_press,
@@ -965,6 +974,39 @@ class Bloviate:
             return True, "General settings saved."
         except Exception as exc:
             return False, f"Could not save general settings: {exc}"
+
+    def _cleanup_mode_label(self, mode: str) -> str:
+        labels = {
+            "verbatim": "Verbatim",
+            "clean": "Clean",
+            "coding": "Coding",
+            "message": "Message",
+        }
+        return labels.get(str(mode or "").strip().lower(), str(mode or "").title())
+
+    def cycle_post_processing_mode(self) -> tuple[bool, str]:
+        """Cycle output cleanup mode from the global command-key tap gesture."""
+        modes = list(self.model_registry.POST_PROCESSING_MODES)
+        current = str(
+            self.config.get("post_processing", {}).get("mode", "verbatim") or "verbatim"
+        ).strip().lower()
+        try:
+            index = modes.index(current)
+        except ValueError:
+            index = 0
+        next_mode = modes[(index + 1) % len(modes)]
+        self.config.setdefault("post_processing", {})["mode"] = next_mode
+        saved_path = _save_config(self.config)
+        self._refresh_runtime_config_views()
+
+        label = self._cleanup_mode_label(next_mode)
+        message = f"Cleanup mode: {label}"
+        if self.verbose_logs:
+            print(f"[Config] Saved post_processing.mode={next_mode} to {saved_path}")
+        if self.ui_window:
+            self.ui_window.signals.update_cleanup_mode.emit(next_mode, label)
+            self.ui_window.signals.update_status.emit(message)
+        return True, message
 
     def get_history_records(self, query: str = "", limit: int = 100) -> list[dict]:
         """Return recent transcript history as serializable dictionaries."""
@@ -1353,6 +1395,28 @@ class Bloviate:
             on_press=self.toggle_ptt_recording,
             match_exact=True,
             consume=True,
+        )
+
+    def _setup_mode_cycle_tap(self):
+        """Register the quick command-key tap gesture for cleanup-mode cycling."""
+        ptt_cfg = self.config.get("ptt", {})
+        tap_key = str(ptt_cfg.get("mode_cycle_tap_key", "<cmd>") or "").strip()
+        if not tap_key:
+            return
+        try:
+            tap_count = int(ptt_cfg.get("mode_cycle_tap_count", 3))
+        except (TypeError, ValueError):
+            tap_count = 3
+        try:
+            window_ms = int(ptt_cfg.get("mode_cycle_tap_window_ms", 650))
+        except (TypeError, ValueError):
+            window_ms = 650
+        self.ptt_handler.add_tap_sequence(
+            "cycle_cleanup_mode",
+            tap_key,
+            count=max(2, tap_count),
+            max_interval_s=max(0.2, window_ms / 1000.0),
+            callback=self.cycle_post_processing_mode,
         )
 
     def on_command_press(self):
@@ -1976,6 +2040,7 @@ class Bloviate:
 
         # Start PTT handler
         self._setup_toggle_hotkey()
+        self._setup_mode_cycle_tap()
         try:
             self.ptt_handler.start(
                 on_press=self.on_ptt_press,
