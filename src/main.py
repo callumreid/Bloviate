@@ -37,8 +37,23 @@ def _load_dotenv(path: Optional[Path] = None):
             candidate_paths.append(Path(override).expanduser())
         candidate_paths.append(default_user_config_path().parent / ".env")
         candidate_paths.append(project_root() / ".env")
+        for legacy_dir in (
+            Path.home() / "personal" / "bloviate",
+            Path.home() / "dev" / "bloviate",
+            Path.home() / "src" / "bloviate",
+            Path.home() / "Projects" / "bloviate",
+        ):
+            candidate_paths.append(legacy_dir / ".env")
 
+    seen_paths = set()
     for candidate in candidate_paths:
+        try:
+            candidate = candidate.expanduser().resolve()
+        except Exception:
+            candidate = candidate.expanduser()
+        if candidate in seen_paths:
+            continue
+        seen_paths.add(candidate)
         if not candidate.is_file():
             continue
         with open(candidate, encoding="utf-8") as f:
