@@ -26,7 +26,8 @@ pipx install git+https://github.com/callumreid/Bloviate.git
 Homebrew HEAD install for beta E2E testing:
 
 ```bash
-brew install --HEAD https://raw.githubusercontent.com/callumreid/Bloviate/main/Formula/bloviate.rb
+brew tap callumreid/bloviate https://github.com/callumreid/Bloviate
+brew install --HEAD callumreid/bloviate/bloviate
 ```
 
 See [INSTALL.md](/Users/bronson/personal/bloviate/INSTALL.md) for beta install, permissions, upgrades, and the signed-app roadmap.

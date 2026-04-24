@@ -24,19 +24,22 @@ bloviate --list-devices
 For end-to-end Homebrew testing from the pushed `main` branch:
 
 ```bash
-brew install --HEAD https://raw.githubusercontent.com/callumreid/Bloviate/main/Formula/bloviate.rb
+brew tap callumreid/bloviate https://github.com/callumreid/Bloviate
+brew install --HEAD callumreid/bloviate/bloviate
 ```
 
 Upgrade/reinstall after a new push:
 
 ```bash
-brew reinstall --HEAD bloviate
+brew update
+brew reinstall --HEAD callumreid/bloviate/bloviate
 ```
 
 Remove:
 
 ```bash
 brew uninstall bloviate
+brew untap callumreid/bloviate
 ```
 
 This formula is intended for beta testing. It builds a Homebrew-managed Python virtualenv and installs Bloviate into it.

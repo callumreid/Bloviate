@@ -17,7 +17,8 @@ pipx install git+https://github.com/callumreid/Bloviate.git
 For true Homebrew E2E testing from `main`:
 
 ```bash
-brew install --HEAD https://raw.githubusercontent.com/callumreid/Bloviate/main/Formula/bloviate.rb
+brew tap callumreid/bloviate https://github.com/callumreid/Bloviate
+brew install --HEAD callumreid/bloviate/bloviate
 ```
 
 After that, the command should be available as:
