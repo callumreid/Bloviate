@@ -7,6 +7,8 @@ class Bloviate < Formula
   depends_on "portaudio"
   depends_on "python@3.12"
 
+  preserve_rpath
+
   def install
     venv = libexec/"venv"
     python = Formula["python@3.12"].opt_bin/"python3.12"
