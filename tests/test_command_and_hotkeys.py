@@ -99,6 +99,14 @@ class CommandAndHotkeyTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(app.window_manager.opened, ["Slack"])
 
+    def test_open_the_app_command_executes_known_app_alias(self):
+        app = self._make_app()
+
+        handled = app._try_voice_command("open the app iTerm")
+
+        self.assertTrue(handled)
+        self.assertEqual(app.window_manager.opened, ["iTerm"])
+
     def test_open_app_command_with_extra_words_does_not_execute(self):
         app = self._make_app()
 

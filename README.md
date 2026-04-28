@@ -160,6 +160,7 @@ desktop right
 run command desktop left
 run command desktop right
 open Slack
+open the app iTerm
 launch Chrome
 start Calendar
 ```

@@ -1506,6 +1506,7 @@ class Bloviate:
             "finder": "Finder",
             "firefox": "Firefox",
             "google chrome": "Google Chrome",
+            "i term": "iTerm",
             "iterm": "iTerm",
             "mail": "Mail",
             "messages": "Messages",
@@ -1539,7 +1540,17 @@ class Bloviate:
         if not normalized:
             return None, ""
 
-        prefixes = ("open app", "launch app", "open", "launch", "start")
+        prefixes = (
+            "open the app",
+            "launch the app",
+            "start the app",
+            "open app",
+            "launch app",
+            "start app",
+            "open",
+            "launch",
+            "start",
+        )
         for prefix in prefixes:
             prefix_with_space = f"{prefix} "
             if not normalized.startswith(prefix_with_space):
