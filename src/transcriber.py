@@ -85,25 +85,31 @@ class Transcriber:
             env_name = self.openai_config.get("api_key_env", "OPENAI_API_KEY")
             print(f"[OpenAI] WARNING: No API key found. Set {env_name} to enable OpenAI STT.")
 
-        # Load Whisper model. When Deepgram is primary, use a smaller
-        # fallback model (base.en) and pre-load it in the background so
-        # the first fallback doesn't stall on model loading.
+        # Load Whisper only when it is the primary provider. For Deepgram/OpenAI
+        # installs, keep local fallback lazy by default; preloading medium.en can
+        # make the app look frozen during startup on normal laptops.
         self.model = None
         self._whisper_load_thread = None
+        preload_fallback = bool(self.transcription_config.get("preload_whisper_fallback", False))
         if self.provider == "deepgram":
             self.model_name = config['transcription'].get('whisper_fallback_model', 'base.en')
-            self._whisper_load_thread = threading.Thread(
-                target=self._load_whisper_model, daemon=True
-            )
-            self._whisper_load_thread.start()
+            if preload_fallback:
+                self._whisper_load_thread = threading.Thread(
+                    target=self._load_whisper_model,
+                    daemon=True,
+                    name="bloviate-whisper-preload",
+                )
+                self._whisper_load_thread.start()
             self._validate_deepgram_key()
         elif self.provider == "openai":
-            # Keep a local fallback model warm when OpenAI is primary.
             self.model_name = config['transcription'].get('whisper_fallback_model', 'base.en')
-            self._whisper_load_thread = threading.Thread(
-                target=self._load_whisper_model, daemon=True
-            )
-            self._whisper_load_thread.start()
+            if preload_fallback:
+                self._whisper_load_thread = threading.Thread(
+                    target=self._load_whisper_model,
+                    daemon=True,
+                    name="bloviate-whisper-preload",
+                )
+                self._whisper_load_thread.start()
         else:
             self._load_whisper_model()
 

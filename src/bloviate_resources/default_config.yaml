@@ -60,6 +60,7 @@ transcription:
   provider: "deepgram"  # whisper, deepgram, openai
   model: "medium.en"  # Whisper primary: tiny.en, base.en, small.en, medium.en
   whisper_fallback_model: "medium.en"  # Accuracy-first local fallback
+  preload_whisper_fallback: false  # Avoid heavy torch/Whisper CPU work during app startup
   final_pass: "hybrid"  # hybrid=streaming interim + prerecorded final for best accuracy
   initial_prompt: ""  # Optional base prompt applied to OpenAI + Whisper transcriptions
   include_command_vocabulary: true  # Bias command-mode transcription toward built-in voice commands
