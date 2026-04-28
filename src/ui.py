@@ -263,6 +263,8 @@ class MenuBarIndicator:
         """Update audio level display."""
         if self._closed:
             return
+        if abs(float(level or 0.0) - self.audio_level) < 0.02 and self.current_state == "idle":
+            return
         self.audio_level = level
         if self.current_state in {"idle", "recording", "command_recording"}:
             self._update_icon()
@@ -403,7 +405,7 @@ class BottomOverlayIndicator(QWidget):
         self._closed = False
         self._objc = None  # cached ctypes handles
         self._visibility_timer = QTimer(self)
-        self._visibility_timer.setInterval(500)
+        self._visibility_timer.setInterval(2000)
         self._visibility_timer.timeout.connect(self._ensure_visible)
         # Defer show until the event loop is running
         QTimer.singleShot(0, self._initial_show)
@@ -582,7 +584,10 @@ class BottomOverlayIndicator(QWidget):
         return QColor(160, 160, 160)
 
     def set_audio_level(self, level: float):
-        self.audio_level = max(0.0, min(level, 1.0))
+        next_level = max(0.0, min(level, 1.0))
+        if abs(next_level - self.audio_level) < 0.02 and self.current_state == "idle":
+            return
+        self.audio_level = next_level
         self.update()
 
     def set_recording(self):

@@ -649,16 +649,28 @@ class Bloviate:
         self.recorded_audio = []
         self.is_command_recording = False
         self.recorded_command_audio = []
+        self.is_processing_recording = False
+        self.is_processing_command = False
         self.ui_window = None
         self.ui_app = None
         self._last_interim_text = ""
         self._last_interim_update = 0.0
+        self._last_audio_level_emit = 0.0
+        self._last_audio_level_value = 0.0
         self._shutdown_event = threading.Event()
         self._worker_threads = set()
         self._worker_threads_lock = threading.Lock()
         self._enrollment_lock = threading.Lock()
         self._interim_update_interval_s = float(
             self.config.get("ui", {}).get("interim_update_interval_s", 0.15)
+        )
+        self._audio_level_update_interval_s = max(
+            0.04,
+            float(self.config.get("ui", {}).get("audio_level_update_interval_s", 0.10)),
+        )
+        self._audio_level_min_delta = max(
+            0.0,
+            float(self.config.get("ui", {}).get("audio_level_min_delta", 0.003)),
         )
 
     def list_audio_input_options(self) -> list[dict]:
@@ -1339,6 +1351,13 @@ class Bloviate:
         """Called when PTT is activated."""
         if self._shutdown_event.is_set():
             return
+        if self.is_recording:
+            return
+        if self.is_processing_recording or self.is_processing_command:
+            print("[PTT] Ignored: previous clip is still processing")
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit("Still processing previous clip...")
+            return
         print("\n[PTT] Activated")
 
         if self.ui_window:
@@ -1359,6 +1378,8 @@ class Bloviate:
         """Called when PTT is released."""
         if self._shutdown_event.is_set():
             return
+        if not self.is_recording:
+            return
         print("[PTT] Released")
 
         if self.ui_window:
@@ -1371,7 +1392,8 @@ class Bloviate:
         recorded = self.recorded_audio
         self.recorded_audio = []
         if len(recorded) > 0:
-            self._start_worker(self.process_recording, recorded)
+            self.is_processing_recording = True
+            self._start_worker(self._process_recording_worker, recorded)
         else:
             if self.transcriber.supports_streaming():
                 self.transcriber.finish_stream("dictation")
@@ -1381,7 +1403,14 @@ class Bloviate:
 
     def toggle_ptt_recording(self):
         """Toggle dictation recording without requiring the PTT keys to be held."""
-        if self._shutdown_event.is_set() or self.is_command_recording:
+        if (
+            self._shutdown_event.is_set()
+            or self.is_command_recording
+            or self.is_processing_recording
+            or self.is_processing_command
+        ):
+            if self.ui_window and (self.is_processing_recording or self.is_processing_command):
+                self.ui_window.signals.update_status.emit("Still processing previous clip...")
             return
         if self.is_recording:
             print("[PTT] Toggle off")
@@ -1389,6 +1418,12 @@ class Bloviate:
         else:
             print("[PTT] Toggle on")
             self.on_ptt_press()
+
+    def _process_recording_worker(self, recorded_chunks):
+        try:
+            self.process_recording(recorded_chunks)
+        finally:
+            self.is_processing_recording = False
 
     def _setup_toggle_hotkey(self):
         """Register the optional toggle-dictation hotkey."""
@@ -1431,6 +1466,16 @@ class Bloviate:
         """Called when command mode PTT is activated."""
         if self._shutdown_event.is_set():
             return
+        if self.is_command_recording:
+            return
+        if self.is_recording or self.is_processing_recording or self.is_processing_command:
+            print("[CMD] Ignored: dictation is still active or processing")
+            if self.ui_window:
+                self.ui_window.signals.update_command_status.emit(
+                    "CMD: Busy processing previous clip",
+                    "processing",
+                )
+            return
         print("\n[CMD] Activated")
 
         if self.ui_window:
@@ -1449,6 +1494,8 @@ class Bloviate:
         """Called when command mode PTT is released."""
         if self._shutdown_event.is_set():
             return
+        if not self.is_command_recording:
+            return
         print("[CMD] Released")
 
         if self.ui_window:
@@ -1460,13 +1507,20 @@ class Bloviate:
         recorded = self.recorded_command_audio
         self.recorded_command_audio = []
         if len(recorded) > 0:
-            self._start_worker(self.process_command_recording, recorded)
+            self.is_processing_command = True
+            self._start_worker(self._process_command_recording_worker, recorded)
         else:
             if self.transcriber.supports_streaming():
                 self.transcriber.finish_stream("command")
             print("[CMD] No audio recorded")
             if self.ui_window:
                 self.ui_window.signals.update_command_status.emit("CMD: No audio recorded", "unrecognized")
+
+    def _process_command_recording_worker(self, recorded_chunks):
+        try:
+            self.process_command_recording(recorded_chunks)
+        finally:
+            self.is_processing_command = False
 
     def _normalize_command_text(self, text: str) -> str:
         """Normalize text for command matching."""
@@ -2030,7 +2084,21 @@ class Bloviate:
         # Update UI with audio level
         if self.ui_window:
             level = self.audio_capture.get_audio_level(audio_data)
-            self.ui_window.signals.update_audio_level.emit(level)
+            now = time.monotonic()
+            interval = 0.05 if (self.is_recording or self.is_command_recording) else self._audio_level_update_interval_s
+            level_delta = abs(level - self._last_audio_level_value)
+            if (
+                now - self._last_audio_level_emit >= interval
+                and (
+                    self.is_recording
+                    or self.is_command_recording
+                    or level_delta >= self._audio_level_min_delta
+                    or now - self._last_audio_level_emit >= 0.5
+                )
+            ):
+                self._last_audio_level_emit = now
+                self._last_audio_level_value = level
+                self.ui_window.signals.update_audio_level.emit(level)
 
         # Record audio if PTT is active
         if self.is_recording:

@@ -155,6 +155,8 @@ ui:
   permissions_prompt:
     enabled: true
   interim_update_interval_s: 0.15
+  audio_level_update_interval_s: 0.10
+  audio_level_min_delta: 0.003
   show_menubar_indicator: true  # Show status in macOS menu bar
   show_main_window: true  # Keep dashboard visible by default for first-run setup
   ptt_overlay:
