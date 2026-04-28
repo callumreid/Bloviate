@@ -88,6 +88,11 @@ from personal_dictionary import (
     save_personal_dictionary,
 )
 from history_store import HistoryStore
+from macos_permissions import (
+    accessibility_trusted,
+    open_privacy_pane,
+    request_accessibility,
+)
 from model_registry import ModelRegistry
 from post_processor import PostProcessor
 from secret_store import SecretStore
@@ -365,38 +370,11 @@ def init_personal_dictionary(config: Optional[dict] = None, *, force: bool = Fal
 
 
 def _open_macos_privacy_pane(kind: str) -> tuple[bool, str]:
-    if sys.platform != "darwin":
-        return False, "macOS permission panes are only available on macOS."
-
-    urls = {
-        "microphone": "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-        "accessibility": "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-        "input_monitoring": "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
-        "automation": "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
-    }
-    url = urls.get(kind, "x-apple.systempreferences:com.apple.preference.security?Privacy")
-    try:
-        subprocess.Popen(["open", url])
-        return True, f"Opened macOS {kind.replace('_', ' ')} permission settings."
-    except Exception as exc:
-        return False, f"Could not open macOS permission settings: {exc}"
+    return open_privacy_pane(kind)
 
 
 def _macos_accessibility_trusted() -> bool:
-    if sys.platform != "darwin":
-        return True
-    try:
-        import ctypes
-        import ctypes.util
-
-        path = ctypes.util.find_library("ApplicationServices")
-        if not path:
-            return False
-        app_services = ctypes.cdll.LoadLibrary(path)
-        app_services.AXIsProcessTrusted.restype = ctypes.c_bool
-        return bool(app_services.AXIsProcessTrusted())
-    except Exception:
-        return False
+    return accessibility_trusted()
 
 
 def run_doctor(config_path: str) -> int:
@@ -565,12 +543,24 @@ def run_doctor(config_path: str) -> int:
         else:
             _doctor_line("OK", "macOS Tools", "pbcopy/osascript available")
 
+        if auto_paste or window_management_enabled:
+            if accessibility_trusted():
+                _doctor_line("OK", "Accessibility", "Current process is trusted for simulated paste/hotkeys")
+            else:
+                warnings += 1
+                _doctor_line(
+                    "WARN",
+                    "Accessibility",
+                    (
+                        "Required for auto-paste and some hotkeys. Enable Bloviate in "
+                        "Privacy & Security > Accessibility; if macOS lists Python instead, enable Python too."
+                    ),
+                )
+        else:
+            _doctor_line("OK", "Accessibility", "Not required by current config")
+
         warnings += 1
-        _doctor_line(
-            "WARN",
-            "Permissions",
-            "Microphone permission is required. Accessibility/Automation may still be required for auto-paste and non-modifier shortcuts.",
-        )
+        _doctor_line("WARN", "Microphone Permission", "macOS may prompt on first audio capture")
     else:
         if window_management_enabled:
             warnings += 1
@@ -1107,10 +1097,14 @@ class Bloviate:
                 return False, f"Microphone access is not ready: {exc}"
 
         if normalized == "accessibility":
-            if _macos_accessibility_trusted():
+            if accessibility_trusted():
                 return True, "Accessibility permission is already granted."
-            _open_macos_privacy_pane("accessibility")
-            return True, "Opened Accessibility settings. Enable Bloviate, then return and refresh."
+            if request_accessibility():
+                return True, "Accessibility permission is ready."
+            return True, (
+                "Opened Accessibility settings. Enable Bloviate there. "
+                "If macOS shows Python instead, enable Python too."
+            )
 
         if normalized in {"input_monitoring", "automation"}:
             return _open_macos_privacy_pane(normalized)

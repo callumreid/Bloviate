@@ -57,6 +57,7 @@ py-modules = [
   "deepgram_stream",
   "history_store",
   "main",
+  "macos_permissions",
   "model_registry",
   "noise_suppressor",
   "personal_dictionary",

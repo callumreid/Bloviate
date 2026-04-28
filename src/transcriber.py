@@ -21,6 +21,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from pynput.keyboard import Controller, Key
 from command_vocabulary import get_command_prompt_phrases
+from macos_permissions import accessibility_trusted, request_accessibility
 from personal_dictionary import load_personal_dictionary
 from secret_store import SecretStore
 
@@ -56,6 +57,7 @@ class Transcriber:
         self._prebuffer_chunks = int(self.deepgram_config.get("prebuffer_chunks", 12))
         self._deepgram_max_keyterms = int(self.deepgram_config.get("max_keyterms", 80))
         self._openai_key_missing_warned = False
+        self._accessibility_prompt_requested = False
         self._base_initial_prompt = str(self.transcription_config.get("initial_prompt", "") or "").strip()
         self._prompt_max_terms = max(1, int(self.transcription_config.get("prompt_max_terms", 40)))
         self._prompt_max_chars = max(120, int(self.transcription_config.get("prompt_max_chars", 600)))
@@ -1182,13 +1184,16 @@ class Transcriber:
             app_services = ctypes.cdll.LoadLibrary(app_services_path)
             core_foundation = ctypes.cdll.LoadLibrary(core_foundation_path)
 
-            try:
-                app_services.AXIsProcessTrusted.restype = ctypes.c_bool
-                if not bool(app_services.AXIsProcessTrusted()):
-                    print("CoreGraphics auto-paste unavailable: process is not trusted for Accessibility.")
-                    return False
-            except Exception:
-                pass
+            if not accessibility_trusted():
+                if not self._accessibility_prompt_requested:
+                    self._accessibility_prompt_requested = True
+                    request_accessibility()
+                print(
+                    "CoreGraphics auto-paste unavailable: process is not trusted for Accessibility. "
+                    "Enable Bloviate in Privacy & Security > Accessibility. "
+                    "If macOS lists Python instead, enable Python too."
+                )
+                return False
 
             create_event = app_services.CGEventCreateKeyboardEvent
             create_event.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
