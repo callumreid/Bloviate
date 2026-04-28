@@ -2,6 +2,10 @@
 
 Bloviate is a macOS-first voice dictation app for whispering in noisy spaces. It combines push-to-talk dictation, speaker verification, streaming transcription, an accuracy-first final pass, personal vocabulary, local history, and bring-your-own API keys.
 
+## Demo
+
+<img src="docs/assets/demo-bloviate.jpg" alt="Bloviate demo showing the settings insights dashboard and dictated text appearing in a writing app." width="760">
+
 ## What It Does
 
 - Verifies your enrolled voice before transcribing in whisper mode
