@@ -569,7 +569,7 @@ def run_doctor(config_path: str) -> int:
         _doctor_line(
             "WARN",
             "Permissions",
-            "Microphone permission is required. Accessibility permission is also required for global hotkeys on macOS.",
+            "Microphone permission is required. Accessibility/Automation may still be required for auto-paste and non-modifier shortcuts.",
         )
     else:
         if window_management_enabled:
@@ -948,7 +948,10 @@ class Bloviate:
             self.settings_service.save()
             return False, f"Invalid hotkey settings: {exc}"
 
-        listener_was_running = bool(getattr(self.ptt_handler, "listener", None))
+        listener_was_running = bool(
+            getattr(self.ptt_handler, "listener", None)
+            or getattr(self.ptt_handler, "_is_started", False)
+        )
         if listener_was_running:
             try:
                 self.ptt_handler.stop()

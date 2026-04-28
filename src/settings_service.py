@@ -161,6 +161,15 @@ def _migrate_config(data: dict) -> dict:
         ptt_config["secondary_hotkey"] = "<fn>"
     if not str(ptt_config.get("toggle_hotkey", "") or "").strip():
         ptt_config["toggle_hotkey"] = "<cmd>+<option>+<shift>"
+    if not str(ptt_config.get("listener_backend", "") or "").strip():
+        ptt_config["listener_backend"] = "auto"
+    try:
+        ptt_config["modifier_poll_interval_ms"] = max(
+            10,
+            int(ptt_config.get("modifier_poll_interval_ms", 20)),
+        )
+    except (TypeError, ValueError):
+        ptt_config["modifier_poll_interval_ms"] = 20
     if not str(ptt_config.get("mode_cycle_tap_key", "") or "").strip():
         ptt_config["mode_cycle_tap_key"] = "<cmd>"
     try:

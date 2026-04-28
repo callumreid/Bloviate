@@ -22,6 +22,8 @@ ptt:
   hotkey: "<cmd>+<option>"
   secondary_hotkey: "<fn>"  # Optional secondary PTT hotkey
   toggle_hotkey: "<cmd>+<option>+<shift>"  # Toggle dictation on/off without holding keys
+  listener_backend: "auto"  # macOS uses modifier polling for reliable modifier-only PTT
+  modifier_poll_interval_ms: 20
   mode_cycle_tap_key: "<cmd>"  # Tap quickly to cycle output cleanup mode
   mode_cycle_tap_count: 3
   mode_cycle_tap_window_ms: 650

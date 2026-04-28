@@ -5,6 +5,9 @@ Manages global keyboard shortcuts for activating dictation.
 
 from pynput import keyboard
 from typing import Callable, Optional, Dict
+import ctypes
+import ctypes.util
+import sys
 import threading
 import time
 
@@ -20,6 +23,11 @@ class PTTHandler:
 
         self.is_active = False
         self.listener: Optional[keyboard.Listener] = None
+        self._is_started = False
+        self._poll_thread: Optional[threading.Thread] = None
+        self._poll_stop = threading.Event()
+        self._poll_interval_s = max(0.01, float(ptt_config.get("modifier_poll_interval_ms", 20)) / 1000.0)
+        self._flag_reader = None
         self._press_timer: Optional[threading.Timer] = None
         self.press_delay_s = max(0.0, float(ptt_config.get("press_delay_ms", 90)) / 1000.0)
 
@@ -52,6 +60,16 @@ class PTTHandler:
         self.hotkey_str = self.hotkey_strs[0]
         self.hotkey = self.hotkeys[0]
         self.current_keys = set()
+        self._listener_backend = self._resolve_listener_backend(ptt_config)
+
+    def _resolve_listener_backend(self, ptt_config: dict) -> str:
+        """Choose the global hotkey backend."""
+        configured = str(ptt_config.get("listener_backend", "auto") or "auto").strip().lower()
+        if configured in {"pynput", "modifier_poll"}:
+            return configured
+        if sys.platform == "darwin":
+            return "modifier_poll"
+        return "pynput"
 
     def _resolve_hotkey_strs(self, ptt_config: dict) -> list:
         """Resolve a list of PTT hotkey strings from config."""
@@ -113,6 +131,22 @@ class PTTHandler:
 
         return keys
 
+    @staticmethod
+    def _modifier_keys() -> set:
+        keys = {
+            keyboard.Key.ctrl,
+            keyboard.Key.shift,
+            keyboard.Key.alt,
+            keyboard.Key.cmd,
+        }
+        fn_key = getattr(keyboard.Key, 'fn', None)
+        if fn_key is not None:
+            keys.add(fn_key)
+        return keys
+
+    def _hotkey_is_modifier_only(self, hotkey_set: set) -> bool:
+        return bool(hotkey_set) and hotkey_set.issubset(self._modifier_keys())
+
     def _normalize_key(self, key) -> Optional[str]:
         """Return a normalized key name for comparison."""
         if hasattr(key, 'name') and key.name:
@@ -171,7 +205,7 @@ class PTTHandler:
 
     def _activate_ptt_if_still_matching(self):
         self._press_timer = None
-        if self.listener and self._matches_any_ptt_hotkey() and not self.is_active:
+        if self._is_started and self._matches_any_ptt_hotkey() and not self.is_active:
             self.is_active = True
             if self.on_press_callback:
                 self.on_press_callback()
@@ -333,6 +367,64 @@ class PTTHandler:
             self._tap_candidate_key = None
             self._tap_chord_detected = False
 
+    def _load_modifier_flag_reader(self):
+        """Return CGEventSourceFlagsState for low-risk modifier polling on macOS."""
+        if self._flag_reader is not None:
+            return self._flag_reader
+        if sys.platform != "darwin":
+            return None
+        path = ctypes.util.find_library("ApplicationServices")
+        if not path:
+            return None
+        app_services = ctypes.cdll.LoadLibrary(path)
+        reader = app_services.CGEventSourceFlagsState
+        reader.argtypes = [ctypes.c_int]
+        reader.restype = ctypes.c_ulonglong
+        self._flag_reader = reader
+        return reader
+
+    def _keys_from_modifier_flags(self, flags: int) -> set:
+        """Map CoreGraphics modifier flags to pynput Key objects."""
+        # CGEventFlag masks:
+        # shift 0x20000, control 0x40000, option 0x80000,
+        # command 0x100000, secondary fn 0x800000.
+        keys = set()
+        if flags & 0x00020000:
+            keys.add(keyboard.Key.shift)
+        if flags & 0x00040000:
+            keys.add(keyboard.Key.ctrl)
+        if flags & 0x00080000:
+            keys.add(keyboard.Key.alt)
+        if flags & 0x00100000:
+            keys.add(keyboard.Key.cmd)
+        fn_key = getattr(keyboard.Key, 'fn', None)
+        if fn_key is not None and flags & 0x00800000:
+            keys.add(fn_key)
+        return keys
+
+    def _poll_modifier_hotkeys(self):
+        reader = self._load_modifier_flag_reader()
+        if reader is None:
+            if self.verbose_logs:
+                print("Modifier polling backend unavailable; falling back to no global hotkeys.")
+            return
+        previous_keys = set()
+        while not self._poll_stop.is_set():
+            try:
+                # kCGEventSourceStateHIDSystemState = 1, system-wide hardware key state.
+                current_keys = self._keys_from_modifier_flags(int(reader(1)))
+                for key in current_keys - previous_keys:
+                    self._on_press(key)
+                for key in previous_keys - current_keys:
+                    self._on_release(key)
+                previous_keys = current_keys
+            except Exception as exc:
+                print(f"[Hotkeys] Modifier poll error: {exc}")
+            self._poll_stop.wait(self._poll_interval_s)
+
+        for key in list(previous_keys):
+            self._on_release(key)
+
     def start(self, on_press: Callable, on_release: Callable):
         """
         Start listening for the PTT hotkey.
@@ -343,6 +435,31 @@ class PTTHandler:
         """
         self.on_press_callback = on_press
         self.on_release_callback = on_release
+        self._is_started = True
+
+        if self._listener_backend == "modifier_poll":
+            unsupported = [
+                hotkey
+                for hotkey in self.hotkeys
+                if not self._hotkey_is_modifier_only(hotkey)
+            ]
+            unsupported.extend(
+                hotkey_info["hotkey"]
+                for hotkey_info in self.additional_hotkeys.values()
+                if not self._hotkey_is_modifier_only(hotkey_info["hotkey"])
+            )
+            if unsupported and self.verbose_logs:
+                print("[Hotkeys] Modifier polling ignores non-modifier hotkeys.")
+            self._poll_stop.clear()
+            self.listener = None
+            self._poll_thread = threading.Thread(
+                target=self._poll_modifier_hotkeys,
+                name="bloviate-modifier-hotkeys",
+                daemon=True,
+            )
+            self._poll_thread.start()
+            print(f"PTT handler started with modifier polling: {', '.join(self.hotkey_strs)}")
+            return
 
         # Start keyboard listener in a separate thread
         self.listener = keyboard.Listener(
@@ -361,6 +478,11 @@ class PTTHandler:
         """Stop listening for keyboard events."""
         listener = self.listener
         self.listener = None
+        self._is_started = False
+        if self._poll_thread:
+            self._poll_stop.set()
+            self._poll_thread.join(timeout=join_timeout)
+            self._poll_thread = None
 
         self.is_active = False
         self._cancel_pending_ptt()
@@ -384,3 +506,5 @@ class PTTHandler:
         """Wait for the listener thread to finish."""
         if self.listener:
             self.listener.join()
+        if self._poll_thread:
+            self._poll_thread.join()

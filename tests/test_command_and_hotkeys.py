@@ -134,6 +134,15 @@ class CommandAndHotkeyTests(unittest.TestCase):
 
         self.assertEqual(events, [])
 
+    def test_modifier_polling_maps_command_option_flags(self):
+        handler = PTTHandler(
+            {"ptt": {"hotkey": "<cmd>+<option>", "listener_backend": "modifier_poll"}}
+        )
+
+        keys = handler._key_set(handler._keys_from_modifier_flags(0x00100000 | 0x00080000))
+
+        self.assertEqual(keys, {"cmd", "alt"})
+
     def test_cycle_post_processing_mode_persists_next_mode(self):
         with tempfile.TemporaryDirectory() as tempdir:
             app = main.Bloviate.__new__(main.Bloviate)
