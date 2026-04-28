@@ -1473,17 +1473,84 @@ class Bloviate:
         normalized = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
         return f" {normalized} " if normalized else ""
 
+    def _command_key(self, text: str) -> str:
+        """Normalize command text without padding."""
+        return self._normalize_command_text(text).strip()
+
     def _parse_window_command(self, text: str) -> Optional[str]:
         """Parse the transcribed text into a window command."""
-        normalized = self._normalize_command_text(text)
+        normalized = self._command_key(text)
         if not normalized:
             return None
 
         for phrase, position in sorted_aliases(WINDOW_COMMAND_ALIASES):
-            if f" {phrase} " in normalized:
+            if phrase == normalized:
                 return position
 
         return None
+
+    def _app_command_aliases(self) -> dict[str, str]:
+        """Return normalized app launch aliases."""
+        aliases = {
+            "arc": "Arc",
+            "calendar": "Calendar",
+            "chat gpt": "ChatGPT",
+            "chatgpt": "ChatGPT",
+            "chrome": "Google Chrome",
+            "claude": "Claude",
+            "code": "Visual Studio Code",
+            "cursor": "Cursor",
+            "discord": "Discord",
+            "facetime": "FaceTime",
+            "figma": "Figma",
+            "finder": "Finder",
+            "firefox": "Firefox",
+            "google chrome": "Google Chrome",
+            "iterm": "iTerm",
+            "mail": "Mail",
+            "messages": "Messages",
+            "microsoft teams": "Microsoft Teams",
+            "notes": "Notes",
+            "notion": "Notion",
+            "preview": "Preview",
+            "reminders": "Reminders",
+            "safari": "Safari",
+            "slack": "Slack",
+            "spotify": "Spotify",
+            "teams": "Microsoft Teams",
+            "terminal": "Terminal",
+            "text edit": "TextEdit",
+            "textedit": "TextEdit",
+            "visual studio code": "Visual Studio Code",
+            "vs code": "Visual Studio Code",
+            "zoom": "zoom.us",
+        }
+        configured = self.config.get("window_management", {}).get("app_aliases", {})
+        if isinstance(configured, dict):
+            for alias, app_name in configured.items():
+                normalized = self._command_key(str(alias))
+                if normalized and app_name:
+                    aliases[normalized] = str(app_name).strip()
+        return aliases
+
+    def _parse_app_command(self, text: str) -> tuple[Optional[str], str]:
+        """Parse isolated app-launch commands such as 'open Slack'."""
+        normalized = self._command_key(text)
+        if not normalized:
+            return None, ""
+
+        prefixes = ("open app", "launch app", "open", "launch", "start")
+        for prefix in prefixes:
+            prefix_with_space = f"{prefix} "
+            if not normalized.startswith(prefix_with_space):
+                continue
+            requested = normalized[len(prefix_with_space):].strip()
+            if not requested:
+                return None, ""
+            app_name = self._app_command_aliases().get(requested)
+            if app_name:
+                return f"open_app:{app_name}", f"{prefix} {requested}"
+        return None, ""
 
     def _voice_command_prefixes(self) -> list[str]:
         """Return normalized phrase prefixes that turn dictation into commands."""
@@ -1504,8 +1571,8 @@ class Bloviate:
         return prefixes or ["run command", "screen", "window", "desktop"]
 
     def _parse_prefixed_voice_command(self, text: str) -> tuple[Optional[str], str]:
-        """Parse inline dictation commands such as 'screen left half'."""
-        normalized = self._normalize_command_text(text)
+        """Parse isolated dictation commands such as 'screen left half'."""
+        normalized = self._command_key(text)
         if not normalized:
             return None, ""
 
@@ -1513,31 +1580,31 @@ class Bloviate:
         window_suffixes = sorted_aliases(WINDOW_PREFIX_SUFFIXES)
         desktop_suffixes = sorted_aliases(DESKTOP_PREFIX_SUFFIXES)
 
-        def contains(phrase: str) -> bool:
-            return f" {phrase} " in normalized
+        def matches(phrase: str) -> bool:
+            return phrase == normalized
 
         for prefix in prefixes:
             if prefix == "desktop":
                 for suffix, command in desktop_suffixes:
                     phrase = f"desktop {suffix}"
-                    if contains(phrase):
+                    if matches(phrase):
                         return command, phrase
                 continue
 
             for suffix, command in window_suffixes:
                 phrase = f"{prefix} {suffix}"
-                if contains(phrase):
+                if matches(phrase):
                     return command, phrase
 
             if prefix in {"run command", "command"}:
                 for suffix, command in window_suffixes:
                     for scope in ("screen", "window"):
                         phrase = f"{prefix} {scope} {suffix}"
-                        if contains(phrase):
+                        if matches(phrase):
                             return command, phrase
                 for suffix, command in desktop_suffixes:
                     phrase = f"{prefix} desktop {suffix}"
-                    if contains(phrase):
+                    if matches(phrase):
                         return command, phrase
 
         return None, ""
@@ -1552,25 +1619,34 @@ class Bloviate:
         if not self.window_manager:
             return False
 
-        command, phrase = self._parse_prefixed_voice_command(text)
+        command, phrase = self._parse_app_command(text)
+        if not command:
+            command, phrase = self._parse_prefixed_voice_command(text)
         if command:
             print(f"[VOICE CMD] Matched '{phrase}' → {command}")
-            self._execute_voice_command(command, text)
+            self._execute_voice_command(command, text, status_prefix="Voice")
             return True
 
         return False
 
-    def _execute_voice_command(self, command: str, original_text: str):
+    def _command_display_label(self, command: str) -> str:
+        if command.startswith("open_app:"):
+            return f"Open {command.split(':', 1)[1]}"
+        return command.replace("_", " ").title()
+
+    def _execute_voice_command(self, command: str, original_text: str, status_prefix: str = "Voice"):
         """Execute a voice command and update UI."""
-        if command.startswith("desktop_"):
+        if command.startswith("open_app:"):
+            self.window_manager.open_application(command.split(":", 1)[1])
+        elif command.startswith("desktop_"):
             direction = command.replace("desktop_", "")
             self.window_manager.switch_desktop(direction)
         else:
             self.window_manager.resize_focused_window(command)
 
-        if self.ui_window:
+        if status_prefix and self.ui_window:
             self.ui_window.signals.update_command_status.emit(
-                f"Voice: {command.replace('_', ' ').title()}",
+                f"{status_prefix}: {self._command_display_label(command)}",
                 "recognized"
             )
             self.ui_window.signals.update_status.emit("Ready")
@@ -1701,7 +1777,11 @@ class Bloviate:
         text = stream_text
         provider_used = "deepgram_streaming" if stream_text else ""
         if stream_text:
-            command = self._parse_window_command(stream_text)
+            command, _ = self._parse_app_command(stream_text)
+            if not command:
+                command, _ = self._parse_prefixed_voice_command(stream_text)
+            if not command:
+                command = self._parse_window_command(stream_text)
             if command:
                 print(f"[CMD] Streaming recognized command: {command}")
 
@@ -1715,7 +1795,11 @@ class Bloviate:
             )
             if final_text:
                 text = final_text
-                command = self._parse_window_command(final_text)
+                command, _ = self._parse_app_command(final_text)
+                if not command:
+                    command, _ = self._parse_prefixed_voice_command(final_text)
+                if not command:
+                    command = self._parse_window_command(final_text)
                 if provider_used:
                     print(f"[CMD] Final-pass provider: {provider_used}")
                 if stream_text and final_text != stream_text:
@@ -1743,14 +1827,10 @@ class Bloviate:
         if command:
             print(f"[CMD] Recognized command: {command}")
             if self.window_manager:
-                if command.startswith("desktop_"):
-                    direction = command.replace("desktop_", "")
-                    self.window_manager.switch_desktop(direction)
-                else:
-                    self.window_manager.resize_focused_window(command)
+                self._execute_voice_command(command, text, status_prefix="")
             if self.ui_window:
                 self.ui_window.signals.update_command_status.emit(
-                    f"CMD: {command.replace('_', ' ').title()} (recognized)",
+                    f"CMD: {self._command_display_label(command)} (recognized)",
                     "recognized"
                 )
         else:

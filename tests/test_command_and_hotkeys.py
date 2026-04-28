@@ -33,12 +33,16 @@ class FakeWindowManager:
     def __init__(self):
         self.resized = []
         self.desktops = []
+        self.opened = []
 
     def resize_focused_window(self, command):
         self.resized.append(command)
 
     def switch_desktop(self, direction):
         self.desktops.append(direction)
+
+    def open_application(self, app_name):
+        self.opened.append(app_name)
 
 
 class CommandAndHotkeyTests(unittest.TestCase):
@@ -68,6 +72,40 @@ class CommandAndHotkeyTests(unittest.TestCase):
 
         self.assertTrue(handled)
         self.assertEqual(app.window_manager.desktops, ["right"])
+
+    def test_voice_command_inside_long_dictation_does_not_execute(self):
+        app = self._make_app()
+
+        handled = app._try_voice_command(
+            "please paste this whole paragraph even though it says window left half in the middle"
+        )
+
+        self.assertFalse(handled)
+        self.assertEqual(app.window_manager.resized, [])
+
+    def test_prefixed_command_with_extra_words_does_not_execute(self):
+        app = self._make_app()
+
+        handled = app._try_voice_command("window left half after I finish talking")
+
+        self.assertFalse(handled)
+        self.assertEqual(app.window_manager.resized, [])
+
+    def test_open_app_command_executes_known_app_alias(self):
+        app = self._make_app()
+
+        handled = app._try_voice_command("open Slack")
+
+        self.assertTrue(handled)
+        self.assertEqual(app.window_manager.opened, ["Slack"])
+
+    def test_open_app_command_with_extra_words_does_not_execute(self):
+        app = self._make_app()
+
+        handled = app._try_voice_command("open Slack and write a message")
+
+        self.assertFalse(handled)
+        self.assertEqual(app.window_manager.opened, [])
 
     def test_toggle_hotkey_does_not_trigger_shorter_ptt_prefix(self):
         handler = PTTHandler(

@@ -225,6 +225,26 @@ class WindowManager:
         except Exception as e:
             print(f"Error switching desktop: {e}")
 
+    def open_application(self, app_name: str):
+        """Open a macOS application by display name."""
+        app = str(app_name or "").strip()
+        if not app:
+            print("Open app error: No application name provided.")
+            return
+
+        try:
+            result = subprocess.run(
+                ["open", "-a", app],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                print(f"Open app error: {detail or app}")
+        except Exception as e:
+            print(f"Error opening app '{app}': {e}")
+
     def show_position_menu(self):
         """Show a simple menu to select window position."""
         # For now, we'll cycle through positions or use a simple approach

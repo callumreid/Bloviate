@@ -8,7 +8,7 @@ Bloviate is a macOS-first voice dictation app for whispering in noisy spaces. It
 - Supports talk mode when you want normal dictation without speaker verification
 - Supports hold-to-talk and toggle-to-talk; `Cmd+Option+Shift` toggles dictation by default
 - Cycles cleanup mode with three quick `Command` taps and shows the selected mode in the bottom overlay
-- Runs window commands from phrases like `screen left half` or `run command desktop right`
+- Runs isolated voice commands like `screen left half`, `run command desktop right`, or `open Slack`
 - Uses Deepgram for live interim text, OpenAI or Deepgram for final text, and local Whisper as fallback
 - Lets you configure audio input, hotkeys, models, providers, API keys, dictionary, cleanup, history, startup behavior, and diagnostics from Settings
 - Shows local usage insights in Settings: words dictated, speaking pace, cleanup fixes, app breakdown, and streak heatmap
@@ -128,6 +128,41 @@ Older repo-local `custom_dictionary.yaml`, `personal_dictionary.yaml`, and `lear
 - Message: formats dictated text like a concise message; it differs most when OpenAI cleanup is enabled.
 
 Tap `Command` three times quickly to cycle these modes without opening Settings. The bottom waveform overlay briefly expands to show the new mode.
+
+## Voice Commands
+
+Voice commands only execute when the whole utterance is the command. If a command phrase appears inside a longer dictated paragraph, Bloviate treats it as text.
+
+Window commands:
+
+```text
+window left half
+window right half
+window top half
+window bottom half
+window full screen
+window exit full screen
+window larger
+window smaller
+window top left quarter
+window top right quarter
+window bottom left quarter
+window bottom right quarter
+```
+
+You can say `screen ...` instead of `window ...`, or prefix with `run command`, for example `run command screen left half`.
+
+Desktop and app commands:
+
+```text
+desktop left
+desktop right
+run command desktop left
+run command desktop right
+open Slack
+launch Chrome
+start Calendar
+```
 
 ## Local History
 
