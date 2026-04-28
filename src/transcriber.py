@@ -4,6 +4,8 @@ Handles audio transcription using Whisper, Deepgram, or OpenAI.
 """
 
 import json
+import ctypes
+import ctypes.util
 import io
 import re
 import subprocess
@@ -1143,25 +1145,114 @@ class Transcriber:
 
     def _auto_paste(self):
         """Automatically paste clipboard contents by simulating Cmd+V."""
-        try:
-            # Small delay to ensure clipboard is ready
-            time.sleep(0.15)
+        # Small delay to ensure clipboard is ready
+        time.sleep(0.15)
 
-            if sys.platform == 'darwin':
-                # Use osascript for more reliable keyboard simulation on macOS
-                subprocess.run([
-                    'osascript', '-e',
-                    'tell application "System Events" to keystroke "v" using command down'
-                ], check=True, capture_output=True)
+        if sys.platform == 'darwin':
+            if self._auto_paste_macos_quartz():
                 print("[Auto-paste] Pasted to active window")
-            else:
+                return
+            if self._auto_paste_macos_applescript():
+                print("[Auto-paste] Pasted to active window")
+                return
+            print(
+                "Auto-paste failed. Enable Bloviate in Privacy & Security > Accessibility. "
+                "If macOS lists Python instead of Bloviate, enable Python too. "
+                "For AppleScript fallback, allow Bloviate to control System Events under Automation."
+            )
+            return
+
+        try:
+            if sys.platform != 'darwin':
                 # Use pynput for other platforms
                 with self.keyboard.pressed(Key.ctrl):
                     self.keyboard.press('v')
                     self.keyboard.release('v')
-
-        except subprocess.CalledProcessError as e:
-            print(f"Error auto-pasting (AppleScript): {e}")
-            print("Grant Accessibility/Automation permission to Bloviate or the terminal app that launched it.")
         except Exception as e:
             print(f"Error auto-pasting: {e}")
+
+    def _auto_paste_macos_quartz(self) -> bool:
+        """Paste via CoreGraphics keyboard events to avoid AppleScript Automation prompts."""
+        try:
+            app_services_path = ctypes.util.find_library("ApplicationServices")
+            core_foundation_path = ctypes.util.find_library("CoreFoundation")
+            if not app_services_path or not core_foundation_path:
+                return False
+
+            app_services = ctypes.cdll.LoadLibrary(app_services_path)
+            core_foundation = ctypes.cdll.LoadLibrary(core_foundation_path)
+
+            try:
+                app_services.AXIsProcessTrusted.restype = ctypes.c_bool
+                if not bool(app_services.AXIsProcessTrusted()):
+                    print("CoreGraphics auto-paste unavailable: process is not trusted for Accessibility.")
+                    return False
+            except Exception:
+                pass
+
+            create_event = app_services.CGEventCreateKeyboardEvent
+            create_event.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
+            create_event.restype = ctypes.c_void_p
+
+            set_flags = app_services.CGEventSetFlags
+            set_flags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+            set_flags.restype = None
+
+            post_event = app_services.CGEventPost
+            post_event.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+            post_event.restype = None
+
+            release = core_foundation.CFRelease
+            release.argtypes = [ctypes.c_void_p]
+            release.restype = None
+
+            k_cg_hid_event_tap = 0
+            k_vk_ansi_v = 9
+            k_vk_command = 55
+            command_flag = 0x00100000
+
+            for keycode, is_down, flags in (
+                (k_vk_command, True, command_flag),
+                (k_vk_ansi_v, True, command_flag),
+                (k_vk_ansi_v, False, command_flag),
+                (k_vk_command, False, 0),
+            ):
+                event = create_event(None, keycode, is_down)
+                if not event:
+                    return False
+                try:
+                    set_flags(event, flags)
+                    post_event(k_cg_hid_event_tap, event)
+                finally:
+                    release(event)
+                time.sleep(0.012)
+            return True
+        except Exception as exc:
+            print(f"Error auto-pasting (CoreGraphics): {exc}")
+            return False
+
+    def _auto_paste_macos_applescript(self) -> bool:
+        """Paste via System Events as a fallback for environments where it is allowed."""
+        try:
+            result = subprocess.run(
+                [
+                    'osascript', '-e',
+                    'tell application "System Events" to keystroke "v" using command down'
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+            if self.verbose_logs and result.stdout.strip():
+                print(f"[Auto-paste] AppleScript: {result.stdout.strip()}")
+            return True
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            stdout = (exc.stdout or "").strip()
+            detail = stderr or stdout or str(exc)
+            print(f"Error auto-pasting (AppleScript): {detail}")
+            return False
+        except Exception as exc:
+            print(f"Error auto-pasting (AppleScript): {exc}")
+            return False
