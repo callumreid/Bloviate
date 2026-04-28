@@ -11,6 +11,7 @@ Bloviate is a macOS-first voice dictation app for whispering in noisy spaces. It
 - Runs window commands from phrases like `screen left half` or `run command desktop right`
 - Uses Deepgram for live interim text, OpenAI or Deepgram for final text, and local Whisper as fallback
 - Lets you configure audio input, hotkeys, models, providers, API keys, dictionary, cleanup, history, startup behavior, and diagnostics from Settings
+- Shows local usage insights in Settings: words dictated, speaking pace, cleanup fixes, app breakdown, and streak heatmap
 - Stores user config/state under `~/Library/Application Support/Bloviate`
 - Keeps transcript history locally in SQLite; raw audio is not stored by default
 

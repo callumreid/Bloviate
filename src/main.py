@@ -1012,6 +1012,17 @@ class Bloviate:
         """Return recent transcript history as serializable dictionaries."""
         return [record.__dict__ for record in self.history_store.recent(query=query, limit=limit)]
 
+    def get_history_insights(self) -> dict:
+        """Return aggregate usage metrics and dictionary context for the settings UI."""
+        insights = self.history_store.insights()
+        try:
+            payload = load_personal_dictionary(self.config)
+        except Exception:
+            payload = {}
+        insights["dictionary_terms"] = len(payload.get("preferred_terms", []) or [])
+        insights["dictionary_corrections"] = len(payload.get("corrections", []) or [])
+        return insights
+
     def delete_history_record(self, record_id: int) -> tuple[bool, str]:
         ok = self.history_store.delete(record_id)
         return ok, "Deleted history item." if ok else "History item was not found."
@@ -2015,6 +2026,7 @@ class Bloviate:
             set_hotkey_settings=self.set_hotkey_settings,
             set_general_settings=self.set_general_settings,
             get_history_records=self.get_history_records,
+            get_history_insights=self.get_history_insights,
             delete_history_record=self.delete_history_record,
             clear_history=self.clear_history,
             export_history=self.export_history,

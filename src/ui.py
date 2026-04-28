@@ -9,10 +9,11 @@ from PyQt6.QtWidgets import (
     QComboBox, QPushButton, QFrame, QStackedWidget, QGroupBox,
     QSlider, QCheckBox, QMessageBox, QScrollArea, QLineEdit,
     QTextEdit, QFormLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QFileDialog, QSizePolicy
+    QHeaderView, QAbstractItemView, QFileDialog, QSizePolicy,
+    QGridLayout
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker
-from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker, QRectF
+from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter, QPen
 import sys
 import numpy as np
 
@@ -766,6 +767,144 @@ class AudioLevelMeter(QWidget):
         painter.end()
 
 
+class InsightGauge(QWidget):
+    """Compact semicircle gauge used by the insights cards."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.value = 0.0
+        self.center_text = "--"
+        self.caption = ""
+        self.setMinimumHeight(118)
+
+    def set_data(self, value: float, center_text: str, caption: str):
+        self.value = max(0.0, min(float(value or 0.0), 1.0))
+        self.center_text = str(center_text or "--")
+        self.caption = str(caption or "")
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = QRectF(18, 18, self.width() - 36, max(70, self.height() + 18))
+        arc_rect = QRectF(rect.x(), rect.y(), rect.width(), rect.height())
+        track_pen = QPen(QColor("#D8D0C2"), 14)
+        track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(track_pen)
+        painter.drawArc(arc_rect, 200 * 16, -220 * 16)
+
+        value_pen = QPen(QColor("#2D6B6B"), 14)
+        value_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(value_pen)
+        painter.drawArc(arc_rect, 200 * 16, int(-220 * self.value * 16))
+
+        painter.setPen(QColor("#26211D"))
+        font = QFont()
+        font.setPointSize(18)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(self.rect().adjusted(0, 42, 0, -28), Qt.AlignmentFlag.AlignCenter, self.center_text)
+
+        painter.setPen(QColor("#6F665E"))
+        font.setPointSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(self.rect().adjusted(0, 70, 0, -8), Qt.AlignmentFlag.AlignCenter, self.caption)
+        painter.end()
+
+
+class InsightStreakHeatmap(QWidget):
+    """GitHub-style calendar heatmap for recent dictation days."""
+
+    _COLORS = ["#F0E9DE", "#CFEDEA", "#72C9BE", "#2D8B7E", "#1F6F68"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.days = []
+        self.setMinimumHeight(166)
+
+    def set_days(self, days: list[dict]):
+        self.days = list(days or [])
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        days = self.days[-84:]
+        if not days:
+            painter.setPen(QColor("#6F665E"))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No dictation history yet")
+            painter.end()
+            return
+
+        max_words = max([int(day.get("words", 0) or 0) for day in days] + [1])
+        cell = min(14, max(8, int((self.width() - 34) / 14)))
+        gap = 6
+        start_x = 8
+        start_y = 20
+
+        labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        painter.setPen(QColor("#7C7166"))
+        label_font = QFont()
+        label_font.setPointSize(8)
+        painter.setFont(label_font)
+        for row, label in enumerate(labels):
+            painter.drawText(0, start_y + row * (cell + gap) + cell - 2, label[:3])
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        grid_x = start_x + 30
+        for idx, day in enumerate(days):
+            col = idx // 7
+            row = idx % 7
+            words = int(day.get("words", 0) or 0)
+            if words <= 0:
+                color_index = 0
+            else:
+                color_index = min(4, 1 + int((words / max_words) * 3.99))
+            painter.setBrush(QColor(self._COLORS[color_index]))
+            painter.drawRoundedRect(
+                grid_x + col * (cell + gap),
+                start_y + row * (cell + gap),
+                cell,
+                cell,
+                3,
+                3,
+            )
+
+        legend_y = start_y + 7 * (cell + gap) + 10
+        painter.setPen(QColor("#7C7166"))
+        painter.drawText(grid_x, legend_y + cell - 1, "Less")
+        painter.setPen(Qt.PenStyle.NoPen)
+        for idx, color in enumerate(self._COLORS):
+            painter.setBrush(QColor(color))
+            painter.drawRoundedRect(grid_x + 42 + idx * (cell + 4), legend_y, cell, cell, 3, 3)
+        painter.setPen(QColor("#7C7166"))
+        painter.drawText(grid_x + 42 + len(self._COLORS) * (cell + 4) + 6, legend_y + cell - 1, "More")
+        painter.end()
+
+
+class InsightCard(QFrame):
+    """Shared card chrome for settings insights."""
+
+    def __init__(self, title: str, subtitle: str = ""):
+        super().__init__()
+        self.setObjectName("InsightCard")
+        self.setMinimumHeight(156)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(18, 16, 18, 16)
+        self.layout.setSpacing(8)
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("InsightTitle")
+        self.layout.addWidget(self.title_label)
+        if subtitle:
+            subtitle_label = QLabel(subtitle)
+            subtitle_label.setObjectName("InsightSubtitle")
+            self.layout.addWidget(subtitle_label)
+
+
 class BloviateUI(QMainWindow):
     """Minimal UI showing real-time feedback."""
 
@@ -792,6 +931,7 @@ class BloviateUI(QMainWindow):
         set_hotkey_settings=None,
         set_general_settings=None,
         get_history_records=None,
+        get_history_insights=None,
         delete_history_record=None,
         clear_history=None,
         export_history=None,
@@ -826,6 +966,7 @@ class BloviateUI(QMainWindow):
         self.set_hotkey_settings = set_hotkey_settings
         self.set_general_settings = set_general_settings
         self.get_history_records = get_history_records
+        self.get_history_insights = get_history_insights
         self.delete_history_record = delete_history_record
         self.clear_history = clear_history
         self.export_history = export_history
@@ -926,6 +1067,7 @@ class BloviateUI(QMainWindow):
         self._refresh_voice_controls()
         self._refresh_dictionary_path()
         self._refresh_permissions()
+        self._refresh_insights()
         QTimer.singleShot(900, self._maybe_show_permissions_prompt)
 
     def _build_status_tab(self):
@@ -1032,6 +1174,89 @@ class BloviateUI(QMainWindow):
         self.open_input_monitoring_button.clicked.connect(lambda: self._request_permission("input_monitoring"))
         self.open_automation_button.clicked.connect(lambda: self._request_permission("automation"))
         self.refresh_permissions_button.clicked.connect(self._refresh_permissions)
+
+        # Insights
+        insights_group = QGroupBox("Insights")
+        insights_layout = QVBoxLayout(insights_group)
+        insights_layout.setSpacing(16)
+        insights_header = QHBoxLayout()
+        insights_title = QLabel("Your Usage")
+        insights_title.setObjectName("InsightSectionTitle")
+        self.insights_status_label = QLabel("")
+        self.insights_status_label.setStyleSheet(self._settings_status_default_style)
+        self.refresh_insights_button = QPushButton("Refresh")
+        insights_header.addWidget(insights_title)
+        insights_header.addStretch()
+        insights_header.addWidget(self.insights_status_label)
+        insights_header.addWidget(self.refresh_insights_button)
+        insights_layout.addLayout(insights_header)
+
+        insights_grid = QGridLayout()
+        insights_grid.setHorizontalSpacing(16)
+        insights_grid.setVerticalSpacing(16)
+        for column in range(3):
+            insights_grid.setColumnStretch(column, 1)
+
+        self.insight_wpm_card = InsightCard("Words per minute", "speaking pace")
+        self.insight_wpm_value = QLabel("0")
+        self.insight_wpm_value.setObjectName("InsightNumber")
+        self.insight_wpm_gauge = InsightGauge()
+        self.insight_wpm_card.layout.addWidget(self.insight_wpm_value)
+        self.insight_wpm_card.layout.addWidget(self.insight_wpm_gauge)
+        insights_grid.addWidget(self.insight_wpm_card, 0, 0)
+
+        self.insight_fixes_card = InsightCard("Fixes made", "cleanup and dictionary")
+        self.insight_fixes_value = QLabel("0")
+        self.insight_fixes_value.setObjectName("InsightNumber")
+        self.insight_changed_words_label = QLabel("0 words rewritten")
+        self.insight_dictionary_rules_label = QLabel("0 dictionary rules active")
+        self.insight_fixes_card.layout.addWidget(self.insight_fixes_value)
+        self.insight_fixes_card.layout.addWidget(self.insight_changed_words_label)
+        self.insight_fixes_card.layout.addWidget(self.insight_dictionary_rules_label)
+        self.insight_fixes_card.layout.addStretch()
+        insights_grid.addWidget(self.insight_fixes_card, 0, 1)
+
+        self.insight_words_card = InsightCard("Total words dictated", "local history")
+        self.insight_total_words_value = QLabel("0")
+        self.insight_total_words_value.setObjectName("InsightNumber")
+        self.insight_total_transcripts_label = QLabel("0 saved transcripts")
+        self.insight_mode_bar = QProgressBar()
+        self.insight_mode_bar.setRange(0, 100)
+        self.insight_words_card.layout.addWidget(self.insight_total_words_value)
+        self.insight_words_card.layout.addWidget(self.insight_total_transcripts_label)
+        self.insight_words_card.layout.addWidget(self.insight_mode_bar)
+        self.insight_words_card.layout.addStretch()
+        insights_grid.addWidget(self.insight_words_card, 0, 2)
+
+        self.insight_apps_card = InsightCard("Desktop usage", "top target apps")
+        self.insight_apps_summary_label = QLabel("Apps used | 0")
+        self.insight_apps_summary_label.setObjectName("InsightSubtitle")
+        self.insight_app_rows_widget = QWidget()
+        self.insight_app_rows_layout = QVBoxLayout(self.insight_app_rows_widget)
+        self.insight_app_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.insight_app_rows_layout.setSpacing(8)
+        self.insight_apps_card.layout.addWidget(self.insight_apps_summary_label)
+        self.insight_apps_card.layout.addWidget(self.insight_app_rows_widget)
+        self.insight_apps_card.layout.addStretch()
+        insights_grid.addWidget(self.insight_apps_card, 1, 0, 1, 2)
+
+        self.insight_streak_card = InsightCard("Dictation streak", "last 12 weeks")
+        streak_header = QHBoxLayout()
+        self.insight_current_streak_label = QLabel("0 day streak")
+        self.insight_current_streak_label.setObjectName("InsightNumberSmall")
+        self.insight_longest_streak_label = QLabel("Longest | 0 days")
+        self.insight_longest_streak_label.setObjectName("InsightSubtitle")
+        streak_header.addWidget(self.insight_current_streak_label)
+        streak_header.addStretch()
+        streak_header.addWidget(self.insight_longest_streak_label)
+        self.insight_streak_heatmap = InsightStreakHeatmap()
+        self.insight_streak_card.layout.addLayout(streak_header)
+        self.insight_streak_card.layout.addWidget(self.insight_streak_heatmap)
+        insights_grid.addWidget(self.insight_streak_card, 1, 2)
+
+        insights_layout.addLayout(insights_grid)
+        layout.addWidget(insights_group)
+        self.refresh_insights_button.clicked.connect(self._refresh_insights)
 
         # Audio settings
         audio_group = QGroupBox("Audio Input")
@@ -2167,6 +2392,120 @@ class BloviateUI(QMainWindow):
             self._dictionary_corrections.pop(row_idx)
             self._save_dictionary_editor()
 
+    @staticmethod
+    def _format_int(value) -> str:
+        try:
+            return f"{int(round(float(value or 0))):,}"
+        except (TypeError, ValueError):
+            return "0"
+
+    @staticmethod
+    def _clear_layout(layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+            child_layout = item.layout()
+            if child_layout:
+                BloviateUI._clear_layout(child_layout)
+
+    def _refresh_insights(self):
+        if not hasattr(self, "insight_wpm_value"):
+            return
+        if not self.get_history_insights:
+            self.insights_status_label.setText("Insights unavailable.")
+            return
+
+        try:
+            insights = self.get_history_insights() or {}
+        except Exception as exc:
+            self.insights_status_label.setText(f"Could not load insights: {exc}")
+            self.insights_status_label.setStyleSheet(self._settings_error_style)
+            return
+
+        total_words = int(insights.get("total_words", 0) or 0)
+        total_transcripts = int(insights.get("total_transcripts", 0) or 0)
+        wpm = int(insights.get("words_per_minute", 0) or 0)
+        changed_outputs = int(insights.get("changed_outputs", 0) or 0)
+        changed_words = int(insights.get("changed_words", 0) or 0)
+        dictionary_corrections = int(insights.get("dictionary_corrections", 0) or 0)
+
+        if wpm <= 0:
+            pace_caption = "No timed clips yet"
+        elif wpm < 90:
+            pace_caption = "Measured"
+        elif wpm < 140:
+            pace_caption = "Steady"
+        elif wpm < 190:
+            pace_caption = "Fast"
+        else:
+            pace_caption = "Very fast"
+
+        self.insight_wpm_value.setText(self._format_int(wpm))
+        self.insight_wpm_gauge.set_data(min(wpm / 220.0, 1.0), pace_caption, "pace")
+
+        self.insight_fixes_value.setText(self._format_int(changed_outputs))
+        self.insight_changed_words_label.setText(f"{self._format_int(changed_words)} words rewritten")
+        self.insight_dictionary_rules_label.setText(
+            f"{self._format_int(dictionary_corrections)} dictionary rules active"
+        )
+
+        self.insight_total_words_value.setText(self._format_int(total_words))
+        self.insight_total_transcripts_label.setText(f"{self._format_int(total_transcripts)} saved transcripts")
+
+        mode_usage = insights.get("mode_usage", {}) or {}
+        if mode_usage:
+            dominant_mode, dominant_words = max(mode_usage.items(), key=lambda item: item[1])
+            percent = int(round((float(dominant_words) / max(1, total_words)) * 100))
+            self.insight_mode_bar.setValue(percent)
+            self.insight_mode_bar.setFormat(f"{percent}% {str(dominant_mode).replace('_', ' ')}")
+        else:
+            self.insight_mode_bar.setValue(0)
+            self.insight_mode_bar.setFormat("No dictation yet")
+
+        apps = list(insights.get("app_usage", []) or [])
+        apps_total_words = sum(int(app.get("words", 0) or 0) for app in apps) or 1
+        self.insight_apps_summary_label.setText(
+            f"Apps used | {self._format_int(insights.get('apps_used', 0))}"
+        )
+        self._clear_layout(self.insight_app_rows_layout)
+        if apps:
+            for app in apps[:6]:
+                words = int(app.get("words", 0) or 0)
+                percent = int(round((words / apps_total_words) * 100))
+                row = QWidget()
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(10)
+                name_label = QLabel(str(app.get("name", "Unknown app"))[:28])
+                name_label.setMinimumWidth(132)
+                bar = QProgressBar()
+                bar.setRange(0, 100)
+                bar.setValue(percent)
+                bar.setFormat(f"{percent}%")
+                count_label = QLabel(f"{self._format_int(words)} words")
+                count_label.setMinimumWidth(92)
+                row_layout.addWidget(name_label)
+                row_layout.addWidget(bar, 1)
+                row_layout.addWidget(count_label)
+                self.insight_app_rows_layout.addWidget(row)
+        else:
+            empty = QLabel("New dictations will appear here automatically.")
+            empty.setStyleSheet(self._settings_status_default_style)
+            self.insight_app_rows_layout.addWidget(empty)
+
+        current_streak = int(insights.get("current_streak_days", 0) or 0)
+        longest_streak = int(insights.get("longest_streak_days", 0) or 0)
+        self.insight_current_streak_label.setText(
+            f"{current_streak} day streak" if current_streak != 1 else "1 day streak"
+        )
+        self.insight_longest_streak_label.setText(f"Longest | {longest_streak} days")
+        self.insight_streak_heatmap.set_days(insights.get("daily_usage", []) or [])
+
+        self.insights_status_label.setText(f"{self._format_int(total_words)} words indexed")
+        self.insights_status_label.setStyleSheet(self._settings_status_default_style)
+
     def _refresh_history(self):
         if not hasattr(self, "history_table"):
             return
@@ -2211,6 +2550,7 @@ class BloviateUI(QMainWindow):
                 "No saved transcripts yet. New dictations are recorded automatically.",
                 ok=True,
             )
+        self._refresh_insights()
 
     def _selected_history_id(self):
         rows = self.history_table.selectionModel().selectedRows() if self.history_table.selectionModel() else []
@@ -2453,6 +2793,38 @@ class BloviateUI(QMainWindow):
                 background: #F7F3EA;
             }
             QLabel {
+                color: #26211D;
+            }
+            QFrame#InsightCard {
+                background: #F8F3EA;
+                border: 1px solid #E0D6C7;
+                border-radius: 8px;
+            }
+            QLabel#InsightSectionTitle {
+                font-size: 18px;
+                font-weight: 800;
+                color: #26211D;
+            }
+            QLabel#InsightTitle {
+                font-size: 12px;
+                font-weight: 800;
+                letter-spacing: 0;
+                color: #514941;
+                text-transform: uppercase;
+            }
+            QLabel#InsightSubtitle {
+                font-size: 11px;
+                font-weight: 700;
+                color: #6F665E;
+            }
+            QLabel#InsightNumber {
+                font-size: 28px;
+                font-weight: 800;
+                color: #26211D;
+            }
+            QLabel#InsightNumberSmall {
+                font-size: 22px;
+                font-weight: 800;
                 color: #26211D;
             }
             QLineEdit, QTextEdit, QComboBox, QTableWidget {
@@ -2980,6 +3352,7 @@ def create_ui(
     set_hotkey_settings=None,
     set_general_settings=None,
     get_history_records=None,
+    get_history_insights=None,
     delete_history_record=None,
     clear_history=None,
     export_history=None,
@@ -3022,6 +3395,7 @@ def create_ui(
         set_hotkey_settings=set_hotkey_settings,
         set_general_settings=set_general_settings,
         get_history_records=get_history_records,
+        get_history_insights=get_history_insights,
         delete_history_record=delete_history_record,
         clear_history=clear_history,
         export_history=export_history,

@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -85,6 +86,43 @@ class ProductionServiceTests(unittest.TestCase):
 
             self.assertTrue(store.delete(record_id))
             self.assertEqual(store.recent(), [])
+
+    def test_history_store_insights_aggregate_usage_and_streaks(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "history.sqlite"
+            store = HistoryStore(db_path)
+
+            store.add_transcript(
+                text="hello bloviate world",
+                original_text="hello bloviate world",
+                duration_s=3.0,
+                target_app="TextEdit",
+                created_at="2026-04-26T12:00:00+00:00",
+            )
+            store.add_transcript(
+                text="cleaned message output",
+                original_text="um cleaned message output",
+                duration_s=6.0,
+                target_app="Messages",
+                created_at="2026-04-27T12:00:00+00:00",
+            )
+            store.add_transcript(
+                text="another dictated note",
+                original_text="another dictated note",
+                duration_s=6.0,
+                target_app="TextEdit",
+                created_at="2026-04-28T12:00:00+00:00",
+            )
+
+            insights = store.insights(today=date(2026, 4, 28))
+
+            self.assertEqual(insights["total_transcripts"], 3)
+            self.assertEqual(insights["total_words"], 9)
+            self.assertEqual(insights["changed_outputs"], 1)
+            self.assertEqual(insights["current_streak_days"], 3)
+            self.assertEqual(insights["longest_streak_days"], 3)
+            self.assertEqual(insights["app_usage"][0]["name"], "TextEdit")
+            self.assertEqual(insights["app_usage"][0]["words"], 6)
 
     def test_secret_store_prefers_config_then_keychain_then_env(self):
         fake = FakeKeyring()
