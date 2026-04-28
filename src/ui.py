@@ -930,6 +930,7 @@ class BloviateUI(QMainWindow):
         set_transcription_settings=None,
         set_hotkey_settings=None,
         set_general_settings=None,
+        toggle_dictation=None,
         get_history_records=None,
         get_history_insights=None,
         delete_history_record=None,
@@ -965,6 +966,7 @@ class BloviateUI(QMainWindow):
         self.set_transcription_settings = set_transcription_settings
         self.set_hotkey_settings = set_hotkey_settings
         self.set_general_settings = set_general_settings
+        self.toggle_dictation = toggle_dictation
         self.get_history_records = get_history_records
         self.get_history_insights = get_history_insights
         self.delete_history_record = delete_history_record
@@ -1089,6 +1091,16 @@ class BloviateUI(QMainWindow):
         self.command_label.setObjectName("StatusPill")
         self.command_label.setStyleSheet(self._status_pill_style("#E9E1D3", "#24201C"))
         layout.addWidget(self.command_label)
+
+        controls_layout = QHBoxLayout()
+        controls_layout.addStretch()
+        self.toggle_dictation_button = QPushButton("Start Dictation")
+        self.toggle_dictation_button.setObjectName("PrimaryActionButton")
+        self.toggle_dictation_button.setMinimumWidth(180)
+        controls_layout.addWidget(self.toggle_dictation_button)
+        controls_layout.addStretch()
+        layout.addLayout(controls_layout)
+        self.toggle_dictation_button.clicked.connect(self._toggle_dictation_from_ui)
 
         # Audio Level
         level_layout = QHBoxLayout()
@@ -1773,6 +1785,15 @@ class BloviateUI(QMainWindow):
             self._set_settings_status(self.permissions_status_label, message, ok=ok)
             return
         self._set_settings_status(self.permissions_status_label, "Permission setup is unavailable.", ok=False)
+
+    def _toggle_dictation_from_ui(self):
+        if not self.toggle_dictation:
+            self.status_label.setText("Dictation control unavailable")
+            return
+        try:
+            self.toggle_dictation()
+        except Exception as exc:
+            self.status_label.setText(f"Could not toggle dictation: {exc}")
 
     def _maybe_show_permissions_prompt(self):
         if self._permissions_prompt_shown:
@@ -2772,6 +2793,17 @@ class BloviateUI(QMainWindow):
             QPushButton#NavButton:checked:hover {
                 background: #2D6B6B;
             }
+            QPushButton#PrimaryActionButton {
+                background: #2D6B6B;
+                color: #FFFFFF;
+                border: 1px solid #2D6B6B;
+                border-radius: 8px;
+                padding: 10px 18px;
+                font-weight: 800;
+            }
+            QPushButton#PrimaryActionButton:hover {
+                background: #245C5C;
+            }
             QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
                 background: #F7F3EA;
                 border: 0;
@@ -2973,6 +3005,8 @@ class BloviateUI(QMainWindow):
         if is_active:
             self.ptt_label.setText("PTT: ACTIVE")
             self.ptt_label.setStyleSheet(self._status_pill_style("#2F7D4F", "#FFFFFF"))
+            if hasattr(self, "toggle_dictation_button"):
+                self.toggle_dictation_button.setText("Stop Dictation")
             # Update menu bar indicator
             if self.menu_bar_indicator:
                 self.menu_bar_indicator.set_recording()
@@ -2981,6 +3015,8 @@ class BloviateUI(QMainWindow):
         else:
             self.ptt_label.setText("PTT: Inactive")
             self.ptt_label.setStyleSheet(self._status_pill_style("#E9E1D3", "#24201C"))
+            if hasattr(self, "toggle_dictation_button"):
+                self.toggle_dictation_button.setText("Start Dictation")
 
     def _update_command_status(self, message: str, state: str):
         """Update command mode indicator."""
@@ -3351,6 +3387,7 @@ def create_ui(
     set_transcription_settings=None,
     set_hotkey_settings=None,
     set_general_settings=None,
+    toggle_dictation=None,
     get_history_records=None,
     get_history_insights=None,
     delete_history_record=None,
@@ -3394,6 +3431,7 @@ def create_ui(
         set_transcription_settings=set_transcription_settings,
         set_hotkey_settings=set_hotkey_settings,
         set_general_settings=set_general_settings,
+        toggle_dictation=toggle_dictation,
         get_history_records=get_history_records,
         get_history_insights=get_history_insights,
         delete_history_record=delete_history_record,

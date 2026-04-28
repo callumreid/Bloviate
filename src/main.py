@@ -2025,6 +2025,7 @@ class Bloviate:
             set_transcription_settings=self.set_transcription_settings,
             set_hotkey_settings=self.set_hotkey_settings,
             set_general_settings=self.set_general_settings,
+            toggle_dictation=self.toggle_ptt_recording,
             get_history_records=self.get_history_records,
             get_history_insights=self.get_history_insights,
             delete_history_record=self.delete_history_record,
@@ -2146,6 +2147,11 @@ def install_macos_launcher() -> int:
     executable = macos_dir / "Bloviate"
     launch_script = f"""#!/bin/zsh
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+export PYTHONUNBUFFERED=1
+log_dir="$HOME/Library/Application Support/Bloviate/logs"
+mkdir -p "$log_dir"
+exec >>"$log_dir/launcher.log" 2>&1
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] launching Bloviate via {shlex.quote(str(command_path))}"
 for rc in "$HOME/.zshenv" "$HOME/.zprofile"; do
   if [ -r "$rc" ]; then
     source "$rc" >/dev/null 2>&1
