@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker, QRectF, QSize
 from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter, QPen
 import sys
+import time
 import numpy as np
 
 from ui_themes import (
@@ -54,6 +55,8 @@ class MenuBarIndicator:
         self.current_state = "idle"  # idle, recording, processing, success, rejected, command_*
         self._pulse_phase = False
         self._closed = False
+        self._last_icon_update = 0.0
+        self._last_icon_signature = None
         self.waveform_palette = waveform_palette_for_config(parent.config if parent else {})
         self._pulse_timer = QTimer(self.tray_icon)
         self._pulse_timer.setInterval(320)
@@ -228,11 +231,23 @@ class MenuBarIndicator:
         level = max(0.0, min(self.audio_level, 1.0))
         return min(int(level * 100), 99)
 
-    def _update_icon(self):
+    def _update_icon(self, *, force: bool = False):
         """Update the menu bar icon based on current state."""
         if self._closed:
             return
         level_pct = self._level_pct()
+        level_bucket = int(max(0.0, min(self.audio_level, 1.0)) * 20)
+        signature = (self.current_state, level_bucket, self._pulse_phase)
+        now = time.monotonic()
+        if (
+            not force
+            and self.current_state == "idle"
+            and signature == self._last_icon_signature
+            and now - self._last_icon_update < 0.35
+        ):
+            return
+        self._last_icon_update = now
+        self._last_icon_signature = signature
         if self.current_state == "idle":
             icon = self._create_eq_icon(self.audio_level, QColor(self.waveform_palette.get("idle", "#A0A0A0")))
             self.tray_icon.setIcon(icon)
@@ -295,31 +310,31 @@ class MenuBarIndicator:
         """Set to recording state."""
         self.current_state = "recording"
         self._stop_pulse()
-        self._update_icon()
+        self._update_icon(force=True)
 
     def set_processing(self):
         """Set to processing state."""
         self.current_state = "processing"
         self._start_pulse()
-        self._update_icon()
+        self._update_icon(force=True)
 
     def set_command_recording(self):
         """Set to command recording state."""
         self.current_state = "command_recording"
         self._stop_pulse()
-        self._update_icon()
+        self._update_icon(force=True)
 
     def set_command_processing(self):
         """Set to command processing state."""
         self.current_state = "command_processing"
         self._start_pulse()
-        self._update_icon()
+        self._update_icon(force=True)
 
     def set_command_success(self):
         """Set to command success state."""
         self.current_state = "command_success"
         self._stop_pulse()
-        self._update_icon()
+        self._update_icon(force=True)
         # Auto-reset to idle after 2 seconds
         QTimer.singleShot(2000, self.set_idle)
 
@@ -327,7 +342,7 @@ class MenuBarIndicator:
         """Set to command unrecognized state."""
         self.current_state = "command_unknown"
         self._stop_pulse()
-        self._update_icon()
+        self._update_icon(force=True)
         # Auto-reset to idle after 2 seconds
         QTimer.singleShot(2000, self.set_idle)
 
@@ -335,7 +350,7 @@ class MenuBarIndicator:
         """Set to accepted state."""
         self.current_state = "accepted"
         self._stop_pulse()
-        self._update_icon()
+        self._update_icon(force=True)
         # Auto-reset to idle after 2 seconds
         QTimer.singleShot(2000, self.set_idle)
 
@@ -343,7 +358,7 @@ class MenuBarIndicator:
         """Set to rejected state."""
         self.current_state = "rejected"
         self._stop_pulse()
-        self._update_icon()
+        self._update_icon(force=True)
         # Auto-reset to idle after 2 seconds
         QTimer.singleShot(2000, self.set_idle)
 
@@ -351,7 +366,7 @@ class MenuBarIndicator:
         """Set to idle state."""
         self.current_state = "idle"
         self._stop_pulse()
-        self._update_icon()
+        self._update_icon(force=True)
 
     def hide(self):
         """Hide the tray icon."""
@@ -751,7 +766,7 @@ class AudioLevelMeter(QWidget):
         self._target_level = 0.0
         self._display_level = 0.0
         self._timer = QTimer(self)
-        self._timer.setInterval(33)
+        self._timer.setInterval(50)
         self._timer.timeout.connect(self._animate)
         self.setMinimumHeight(46)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -761,7 +776,15 @@ class AudioLevelMeter(QWidget):
         self.update()
 
     def set_audio_level(self, level: float):
-        self._target_level = max(0.0, min(float(level or 0.0), 1.0))
+        next_level = max(0.0, min(float(level or 0.0), 1.0))
+        if not self.isVisible():
+            self._target_level = next_level
+            self._display_level = next_level
+            self._timer.stop()
+            return
+        if abs(next_level - self._target_level) < 0.015 and self._timer.isActive():
+            return
+        self._target_level = next_level
         if not self._timer.isActive():
             self._timer.start()
 
@@ -1246,6 +1269,9 @@ class BloviateUI(QMainWindow):
         self._dictionary_terms = []
         self._dictionary_corrections = []
         self._achievement_rows = []
+        self._achievement_refresh_timer = QTimer(self)
+        self._achievement_refresh_timer.setSingleShot(True)
+        self._achievement_refresh_timer.timeout.connect(self._refresh_achievements)
         self._permissions_prompt_shown = False
 
         self.init_ui()
@@ -1630,8 +1656,8 @@ class BloviateUI(QMainWindow):
         layout.addWidget(achievements_group)
 
         self.refresh_achievements_button.clicked.connect(self._refresh_achievements)
-        self.achievement_search_edit.textChanged.connect(self._refresh_achievements)
-        self.achievement_filter_combo.currentIndexChanged.connect(self._refresh_achievements)
+        self.achievement_search_edit.textChanged.connect(self._queue_achievement_refresh)
+        self.achievement_filter_combo.currentIndexChanged.connect(self._queue_achievement_refresh)
         self.achievement_ai_checkbox.stateChanged.connect(self._toggle_achievement_ai)
         self.analyze_achievements_button.clicked.connect(self._analyze_achievements)
         self.reset_achievements_button.clicked.connect(self._reset_achievements)
@@ -3154,11 +3180,17 @@ class BloviateUI(QMainWindow):
         self.insights_status_label.setText(f"{self._format_int(total_words)} words indexed")
         self.insights_status_label.setStyleSheet(self._settings_status_default_style)
 
+    def _queue_achievement_refresh(self):
+        if hasattr(self, "_achievement_refresh_timer"):
+            self._achievement_refresh_timer.start(180)
+        else:
+            self._refresh_achievements()
+
     def _refresh_achievements(self):
         if not hasattr(self, "achievement_table"):
             return
-        self.achievement_table.setRowCount(0)
         if not self.get_achievement_summary:
+            self.achievement_table.setRowCount(0)
             self._set_settings_status(self.achievement_status_label, "Achievements unavailable.", ok=False)
             return
 
@@ -3189,29 +3221,34 @@ class BloviateUI(QMainWindow):
 
         achievements = list(summary.get("achievements", []) or [])
         self._achievement_rows = achievements
-        self.achievement_table.setRowCount(len(achievements))
-        for row_idx, item in enumerate(achievements):
-            icon_item = QTableWidgetItem()
-            badge_path = str(item.get("badge_path", "") or "")
-            if badge_path:
-                icon_item.setIcon(QIcon(badge_path))
-            icon_item.setData(Qt.ItemDataRole.UserRole, item)
-            self.achievement_table.setItem(row_idx, 0, icon_item)
+        self.achievement_table.setUpdatesEnabled(False)
+        try:
+            self.achievement_table.setRowCount(0)
+            self.achievement_table.setRowCount(len(achievements))
+            for row_idx, item in enumerate(achievements):
+                icon_item = QTableWidgetItem()
+                badge_path = str(item.get("badge_path", "") or "")
+                if badge_path:
+                    icon_item.setIcon(QIcon(badge_path))
+                icon_item.setData(Qt.ItemDataRole.UserRole, item)
+                self.achievement_table.setItem(row_idx, 0, icon_item)
 
-            title = str(item.get("title", "Achievement"))
-            if item.get("ai_required"):
-                title += " [AI]"
-            title_item = QTableWidgetItem(title)
-            title_item.setData(Qt.ItemDataRole.UserRole, item)
-            title_item.setToolTip(str(item.get("description", "")))
-            self.achievement_table.setItem(row_idx, 1, title_item)
-            self.achievement_table.setItem(row_idx, 2, QTableWidgetItem(str(item.get("category", ""))))
-            self.achievement_table.setItem(row_idx, 3, QTableWidgetItem(str(item.get("progress_label", ""))))
-            status = "Unlocked" if item.get("unlocked") else "Locked"
-            if item.get("hidden"):
-                status = "Secret"
-            self.achievement_table.setItem(row_idx, 4, QTableWidgetItem(status))
-            self.achievement_table.setRowHeight(row_idx, 54)
+                title = str(item.get("title", "Achievement"))
+                if item.get("ai_required"):
+                    title += " [AI]"
+                title_item = QTableWidgetItem(title)
+                title_item.setData(Qt.ItemDataRole.UserRole, item)
+                title_item.setToolTip(str(item.get("description", "")))
+                self.achievement_table.setItem(row_idx, 1, title_item)
+                self.achievement_table.setItem(row_idx, 2, QTableWidgetItem(str(item.get("category", ""))))
+                self.achievement_table.setItem(row_idx, 3, QTableWidgetItem(str(item.get("progress_label", ""))))
+                status = "Unlocked" if item.get("unlocked") else "Locked"
+                if item.get("hidden"):
+                    status = "Secret"
+                self.achievement_table.setItem(row_idx, 4, QTableWidgetItem(status))
+                self.achievement_table.setRowHeight(row_idx, 54)
+        finally:
+            self.achievement_table.setUpdatesEnabled(True)
 
         self._set_settings_status(
             self.achievement_status_label,
@@ -3830,7 +3867,13 @@ class BloviateUI(QMainWindow):
     def _update_audio_level(self, level: float):
         """Update the audio level bar."""
         normalized_level = max(0.0, min(level / 0.26, 1.0))
-        self.audio_bar.set_audio_level(normalized_level)
+        if (
+            hasattr(self, "tabs")
+            and hasattr(self, "status_tab")
+            and self.tabs.currentWidget() is self.status_tab
+            and self.isVisible()
+        ):
+            self.audio_bar.set_audio_level(normalized_level)
 
         # Update menu bar indicator
         if self.menu_bar_indicator:

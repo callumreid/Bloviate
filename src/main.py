@@ -670,11 +670,11 @@ class Bloviate:
             self.config.get("ui", {}).get("interim_update_interval_s", 0.15)
         )
         self._audio_level_update_interval_s = max(
-            0.04,
+            0.12,
             float(self.config.get("ui", {}).get("audio_level_update_interval_s", 0.10)),
         )
         self._audio_level_min_delta = max(
-            0.0,
+            0.008,
             float(self.config.get("ui", {}).get("audio_level_min_delta", 0.003)),
         )
 
@@ -2542,9 +2542,9 @@ exec {shlex.quote(str(command_path))} "$@"
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.4</string>
+  <string>0.3.5</string>
   <key>CFBundleVersion</key>
-  <string>0.3.4</string>
+  <string>0.3.5</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>
