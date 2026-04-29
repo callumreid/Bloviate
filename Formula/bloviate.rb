@@ -17,7 +17,9 @@ class Bloviate < Formula
     system venv/"bin/python", "-m", "pip", "install", "--upgrade", "pip"
     system venv/"bin/python", "-m", "pip", "install", "--no-cache-dir", "."
 
-    bin.write_exec_script venv/"bin/bloviate"
+    wrapper = bin/"bloviate"
+    wrapper.write_exec_script venv/"bin/bloviate"
+    chmod 0555, wrapper
   end
 
   def caveats
