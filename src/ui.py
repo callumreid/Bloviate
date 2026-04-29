@@ -10,12 +10,23 @@ from PyQt6.QtWidgets import (
     QSlider, QCheckBox, QMessageBox, QScrollArea, QLineEdit,
     QTextEdit, QFormLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QFileDialog, QSizePolicy,
-    QGridLayout
+    QGridLayout, QColorDialog
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker, QRectF, QSize
 from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter, QPen
 import sys
 import numpy as np
+
+from ui_themes import (
+    get_theme,
+    normalize_hex,
+    normalize_theme_id,
+    normalize_waveform_preset_id,
+    theme_options,
+    waveform_palette_for_config,
+    waveform_preset_options,
+    waveform_values_for_preset,
+)
 
 
 class UISignals(QObject):
@@ -42,6 +53,7 @@ class MenuBarIndicator:
         self.current_state = "idle"  # idle, recording, processing, success, rejected, command_*
         self._pulse_phase = False
         self._closed = False
+        self.waveform_palette = waveform_palette_for_config(parent.config if parent else {})
         self._pulse_timer = QTimer(self.tray_icon)
         self._pulse_timer.setInterval(320)
         self._pulse_timer.timeout.connect(self._toggle_pulse)
@@ -187,7 +199,15 @@ class MenuBarIndicator:
 
     def _pulse_color(self) -> QColor:
         """Return a pulsing purple color."""
-        return QColor(156, 39, 176) if self._pulse_phase else QColor(123, 31, 162)
+        colors = self.waveform_palette.get("processing", ["#8E5CF7", "#2D6B6B"])
+        if not colors:
+            colors = ["#8E5CF7", "#2D6B6B"]
+        index = 0 if self._pulse_phase else min(1, len(colors) - 1)
+        return QColor(colors[index])
+
+    def set_waveform_palette(self, palette: dict):
+        self.waveform_palette = dict(palette or {})
+        self._update_icon()
 
     def _toggle_pulse(self):
         self._pulse_phase = not self._pulse_phase
@@ -213,7 +233,7 @@ class MenuBarIndicator:
             return
         level_pct = self._level_pct()
         if self.current_state == "idle":
-            icon = self._create_eq_icon(self.audio_level, QColor(160, 160, 160))
+            icon = self._create_eq_icon(self.audio_level, QColor(self.waveform_palette.get("idle", "#A0A0A0")))
             self.tray_icon.setIcon(icon)
             if self.audio_level > 0.05:
                 self.tray_icon.setToolTip(f"Bloviate - Audio: {level_pct}%")
@@ -221,7 +241,7 @@ class MenuBarIndicator:
                 self.tray_icon.setToolTip("Bloviate - Ready")
 
         elif self.current_state == "recording":
-            icon = self._create_eq_icon(self.audio_level, QColor(255, 193, 7))
+            icon = self._create_eq_icon(self.audio_level, QColor(self.waveform_palette.get("recording", "#FFC107")))
             self.tray_icon.setIcon(icon)
             self.tray_icon.setToolTip(f"Bloviate - PTT Active (Audio: {level_pct}%)")
 
@@ -231,7 +251,7 @@ class MenuBarIndicator:
             self.tray_icon.setToolTip("Bloviate - Processing...")
 
         elif self.current_state == "command_recording":
-            icon = self._create_eq_icon(self.audio_level, QColor(33, 150, 243))
+            icon = self._create_eq_icon(self.audio_level, QColor(self.waveform_palette.get("command", "#2196F3")))
             self.tray_icon.setIcon(icon)
             self.tray_icon.setToolTip(f"Bloviate - Command listening (Audio: {level_pct}%)")
 
@@ -241,22 +261,22 @@ class MenuBarIndicator:
             self.tray_icon.setToolTip("Bloviate - Command processing...")
 
         elif self.current_state == "command_success":
-            icon = self._create_eq_icon(self.audio_level, QColor(76, 175, 80))
+            icon = self._create_eq_icon(self.audio_level, QColor(self.waveform_palette.get("accepted", "#4CAF50")))
             self.tray_icon.setIcon(icon)
             self.tray_icon.setToolTip("Bloviate - Command recognized")
 
         elif self.current_state == "command_unknown":
-            icon = self._create_eq_icon(self.audio_level, QColor(244, 67, 54))
+            icon = self._create_eq_icon(self.audio_level, QColor(self.waveform_palette.get("rejected", "#F44336")))
             self.tray_icon.setIcon(icon)
             self.tray_icon.setToolTip("Bloviate - Command unrecognized")
 
         elif self.current_state == "accepted":
-            icon = self._create_eq_icon(self.audio_level, QColor(76, 175, 80))
+            icon = self._create_eq_icon(self.audio_level, QColor(self.waveform_palette.get("accepted", "#4CAF50")))
             self.tray_icon.setIcon(icon)
             self.tray_icon.setToolTip("Bloviate - Voice accepted")
 
         elif self.current_state == "rejected":
-            icon = self._create_eq_icon(self.audio_level, QColor(244, 67, 54))
+            icon = self._create_eq_icon(self.audio_level, QColor(self.waveform_palette.get("rejected", "#F44336")))
             self.tray_icon.setIcon(icon)
             self.tray_icon.setToolTip("Bloviate - Voice Rejected")
 
@@ -360,17 +380,10 @@ class BottomOverlayIndicator(QWidget):
     _PROFILE = [0.35, 0.6, 0.9, 0.6, 0.35]
     _MIN_BAR_HEIGHT = 0.12
     _BAR_RADIUS = 2
-    _PROCESSING_COLORS = [
-        QColor("#E7C873"),
-        QColor("#8E5CF7"),
-        QColor("#2D6B6B"),
-        QColor("#2F7D4F"),
-        QColor("#C58C2A"),
-    ]
-
     def __init__(self, config: dict):
         super().__init__(None)
         self.config = config
+        self.waveform_palette = waveform_palette_for_config(config)
         self.audio_level = 0.0
         self.current_state = "idle"
         self._pulse_phase = False
@@ -526,7 +539,15 @@ class BottomOverlayIndicator(QWidget):
             self.update()
 
     def _pulse_color(self) -> QColor:
-        return QColor(156, 39, 176) if self._pulse_phase else QColor(123, 31, 162)
+        colors = self.waveform_palette.get("processing", ["#8E5CF7", "#2D6B6B"])
+        if not colors:
+            colors = ["#8E5CF7", "#2D6B6B"]
+        index = 0 if self._pulse_phase else min(1, len(colors) - 1)
+        return QColor(colors[index])
+
+    def set_waveform_palette(self, palette: dict):
+        self.waveform_palette = dict(palette or {})
+        self.update()
 
     def _set_hold(self, state: str, hold_ms: int = 2000):
         self._hold_state = state
@@ -575,14 +596,14 @@ class BottomOverlayIndicator(QWidget):
         if self.current_state in {"processing", "command_processing"}:
             return self._pulse_color()
         if self.current_state == "recording":
-            return QColor(255, 193, 7)
+            return QColor(self.waveform_palette.get("recording", "#FFC107"))
         if self.current_state == "command_recording":
-            return QColor(33, 150, 243)
+            return QColor(self.waveform_palette.get("command", "#2196F3"))
         if self.current_state in {"command_success", "accepted"}:
-            return QColor(76, 175, 80)
+            return QColor(self.waveform_palette.get("accepted", "#4CAF50"))
         if self.current_state in {"command_unknown", "rejected"}:
-            return QColor(244, 67, 54)
-        return QColor(160, 160, 160)
+            return QColor(self.waveform_palette.get("rejected", "#F44336"))
+        return QColor(self.waveform_palette.get("idle", "#A0A0A0"))
 
     def set_audio_level(self, level: float):
         next_level = max(0.0, min(level, 1.0))
@@ -671,7 +692,9 @@ class BottomOverlayIndicator(QWidget):
         # Equalizer bars only — no background
         has_message = bool(self._message_text)
         if has_message:
-            painter.setBrush(QColor(255, 253, 247, 236))
+            background = QColor(self.waveform_palette.get("background", "#FFFDF7"))
+            background.setAlpha(236)
+            painter.setBrush(background)
             painter.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
 
         level = max(0.0, min(self.audio_level, 1.0))
@@ -687,7 +710,10 @@ class BottomOverlayIndicator(QWidget):
                 trail = head - idx
                 wave = 1.0 - trail * 0.24 if 0 <= trail <= 3 else 0.10
                 height_ratio = self._MIN_BAR_HEIGHT + (0.95 - self._MIN_BAR_HEIGHT) * wave
-                color = self._PROCESSING_COLORS[(self._processing_phase + idx) % len(self._PROCESSING_COLORS)]
+                colors = self.waveform_palette.get("processing", ["#E7C873", "#8E5CF7", "#2D6B6B"])
+                if not colors:
+                    colors = ["#E7C873", "#8E5CF7", "#2D6B6B"]
+                color = QColor(colors[(self._processing_phase + idx) % len(colors)])
                 painter.setBrush(color)
             else:
                 height_ratio = self._MIN_BAR_HEIGHT + (base - self._MIN_BAR_HEIGHT) * level
@@ -698,7 +724,7 @@ class BottomOverlayIndicator(QWidget):
             painter.drawRoundedRect(x, y, bar_w, h, self._BAR_RADIUS, self._BAR_RADIUS)
 
         if has_message:
-            painter.setPen(QColor("#26211D"))
+            painter.setPen(QColor(self.waveform_palette.get("text", "#26211D")))
             font = QFont()
             font.setPointSize(10)
             font.setBold(True)
@@ -720,6 +746,7 @@ class AudioLevelMeter(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.waveform_palette = waveform_palette_for_config({})
         self._target_level = 0.0
         self._display_level = 0.0
         self._timer = QTimer(self)
@@ -727,6 +754,10 @@ class AudioLevelMeter(QWidget):
         self._timer.timeout.connect(self._animate)
         self.setMinimumHeight(46)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_waveform_palette(self, palette: dict):
+        self.waveform_palette = dict(palette or {})
+        self.update()
 
     def set_audio_level(self, level: float):
         self._target_level = max(0.0, min(float(level or 0.0), 1.0))
@@ -748,7 +779,7 @@ class AudioLevelMeter(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
 
-        painter.setBrush(QColor("#FFFDF7"))
+        painter.setBrush(QColor(self.waveform_palette.get("background", "#FFFDF7")))
         painter.drawRoundedRect(0, 0, self.width(), self.height(), 8, 8)
 
         level = max(0.0, min(self._display_level, 1.0))
@@ -758,8 +789,8 @@ class AudioLevelMeter(QWidget):
         total_w = bar_w * self._BAR_COUNT + self._GAP * (self._BAR_COUNT - 1)
         start_x = self._MARGIN + max(0, int((usable_w - total_w) / 2))
 
-        base_color = QColor("#2D6B6B")
-        quiet_color = QColor("#BFB2A1")
+        base_color = QColor(self.waveform_palette.get("accepted", "#2D6B6B"))
+        quiet_color = QColor(self.waveform_palette.get("quiet", "#BFB2A1"))
         for idx, base in enumerate(self._PROFILE):
             height_ratio = self._MIN_BAR_HEIGHT + (base - self._MIN_BAR_HEIGHT) * level
             h = max(4, int(usable_h * height_ratio))
@@ -781,7 +812,12 @@ class InsightGauge(QWidget):
         self.value = 0.0
         self.center_text = "--"
         self.caption = ""
+        self.theme_colors = get_theme("light")["colors"]
         self.setMinimumHeight(118)
+
+    def set_theme_colors(self, colors: dict):
+        self.theme_colors = dict(colors or self.theme_colors)
+        self.update()
 
     def set_data(self, value: float, center_text: str, caption: str):
         self.value = max(0.0, min(float(value or 0.0), 1.0))
@@ -795,24 +831,24 @@ class InsightGauge(QWidget):
 
         rect = QRectF(18, 18, self.width() - 36, max(70, self.height() + 18))
         arc_rect = QRectF(rect.x(), rect.y(), rect.width(), rect.height())
-        track_pen = QPen(QColor("#D8D0C2"), 14)
+        track_pen = QPen(QColor(self.theme_colors.get("border", "#D8D0C2")), 14)
         track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(track_pen)
         painter.drawArc(arc_rect, 200 * 16, -220 * 16)
 
-        value_pen = QPen(QColor("#2D6B6B"), 14)
+        value_pen = QPen(QColor(self.theme_colors.get("primary", "#2D6B6B")), 14)
         value_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(value_pen)
         painter.drawArc(arc_rect, 200 * 16, int(-220 * self.value * 16))
 
-        painter.setPen(QColor("#26211D"))
+        painter.setPen(QColor(self.theme_colors.get("text", "#26211D")))
         font = QFont()
         font.setPointSize(18)
         font.setBold(True)
         painter.setFont(font)
         painter.drawText(self.rect().adjusted(0, 42, 0, -28), Qt.AlignmentFlag.AlignCenter, self.center_text)
 
-        painter.setPen(QColor("#6F665E"))
+        painter.setPen(QColor(self.theme_colors.get("muted", "#6F665E")))
         font.setPointSize(10)
         font.setBold(True)
         painter.setFont(font)
@@ -823,12 +859,23 @@ class InsightGauge(QWidget):
 class InsightStreakHeatmap(QWidget):
     """GitHub-style calendar heatmap for recent dictation days."""
 
-    _COLORS = ["#F0E9DE", "#CFEDEA", "#72C9BE", "#2D8B7E", "#1F6F68"]
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.days = []
+        self.theme_colors = get_theme("light")["colors"]
+        self.heatmap_colors = ["#F0E9DE", "#CFEDEA", "#72C9BE", "#2D8B7E", "#1F6F68"]
         self.setMinimumHeight(166)
+
+    def set_theme_colors(self, colors: dict):
+        self.theme_colors = dict(colors or self.theme_colors)
+        self.heatmap_colors = [
+            self.theme_colors.get("surface_alt", "#F0E9DE"),
+            self.theme_colors.get("card_alt", "#CFEDEA"),
+            self.theme_colors.get("command", "#72C9BE"),
+            self.theme_colors.get("primary", "#2D8B7E"),
+            self.theme_colors.get("success", "#1F6F68"),
+        ]
+        self.update()
 
     def set_days(self, days: list[dict]):
         self.days = list(days or [])
@@ -841,7 +888,7 @@ class InsightStreakHeatmap(QWidget):
 
         days = self.days[-84:]
         if not days:
-            painter.setPen(QColor("#6F665E"))
+            painter.setPen(QColor(self.theme_colors.get("muted", "#6F665E")))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No dictation history yet")
             painter.end()
             return
@@ -853,7 +900,7 @@ class InsightStreakHeatmap(QWidget):
         start_y = 20
 
         labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-        painter.setPen(QColor("#7C7166"))
+        painter.setPen(QColor(self.theme_colors.get("muted", "#7C7166")))
         label_font = QFont()
         label_font.setPointSize(8)
         painter.setFont(label_font)
@@ -870,7 +917,7 @@ class InsightStreakHeatmap(QWidget):
                 color_index = 0
             else:
                 color_index = min(4, 1 + int((words / max_words) * 3.99))
-            painter.setBrush(QColor(self._COLORS[color_index]))
+            painter.setBrush(QColor(self.heatmap_colors[color_index]))
             painter.drawRoundedRect(
                 grid_x + col * (cell + gap),
                 start_y + row * (cell + gap),
@@ -881,10 +928,10 @@ class InsightStreakHeatmap(QWidget):
             )
 
         legend_y = start_y + 7 * (cell + gap) + 10
-        painter.setPen(QColor("#7C7166"))
+        painter.setPen(QColor(self.theme_colors.get("muted", "#7C7166")))
         painter.drawText(grid_x, legend_y + cell - 1, "Less")
         painter.setPen(Qt.PenStyle.NoPen)
-        for idx, color in enumerate(self._COLORS):
+        for idx, color in enumerate(self.heatmap_colors):
             painter.setBrush(QColor(color))
             painter.drawRoundedRect(grid_x + 42 + idx * (cell + 4), legend_y, cell, cell, 3, 3)
         painter.setPen(QColor("#7C7166"))
@@ -1099,6 +1146,9 @@ class BloviateUI(QMainWindow):
         self.set_terminal_startup_animation_enabled = set_terminal_startup_animation_enabled
         self.signals = UISignals()
         self._closing = False
+        self._theme_id = normalize_theme_id(self.config.get("ui", {}).get("theme", "light"))
+        self._theme = get_theme(self._theme_id)
+        self.config.setdefault("ui", {})["theme"] = self._theme_id
 
         # Create menu bar indicator if enabled
         self.menu_bar_indicator = None
@@ -1202,14 +1252,15 @@ class BloviateUI(QMainWindow):
         self.ptt_label = QLabel("PTT: Inactive")
         self.ptt_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.ptt_label.setObjectName("StatusPill")
-        self.ptt_label.setStyleSheet(self._status_pill_style("#E9E1D3", "#24201C"))
+        colors = self._theme["colors"]
+        self.ptt_label.setStyleSheet(self._status_pill_style(colors["nav"], colors["text"]))
         layout.addWidget(self.ptt_label)
 
         # Command Mode Status
         self.command_label = QLabel("CMD: Inactive")
         self.command_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.command_label.setObjectName("StatusPill")
-        self.command_label.setStyleSheet(self._status_pill_style("#E9E1D3", "#24201C"))
+        self.command_label.setStyleSheet(self._status_pill_style(colors["nav"], colors["text"]))
         layout.addWidget(self.command_label)
 
         controls_layout = QHBoxLayout()
@@ -1226,6 +1277,7 @@ class BloviateUI(QMainWindow):
         level_layout = QHBoxLayout()
         level_label = QLabel("Audio Level:")
         self.audio_bar = AudioLevelMeter()
+        self.audio_bar.set_waveform_palette(self._waveform_palette())
         level_layout.addWidget(level_label)
         level_layout.addWidget(self.audio_bar)
         layout.addLayout(level_layout)
@@ -1244,21 +1296,12 @@ class BloviateUI(QMainWindow):
         # Status message
         self.status_label = QLabel("Ready")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("font-style: italic; color: #6F665E; padding: 8px;")
+        self.status_label.setStyleSheet(f"font-style: italic; color: {colors['muted']}; padding: 8px;")
         layout.addWidget(self.status_label)
 
         # Last transcription
         self.transcription_label = QLabel("")
         self.transcription_label.setWordWrap(True)
-        self._transcription_style_final = (
-            "padding: 14px; background-color: #FFFDF7; color: #26211D; "
-            "border: 1px solid #DDD2C1; border-radius: 8px; min-height: 52px;"
-        )
-        self._transcription_style_interim = (
-            "padding: 14px; background-color: #FFF9E9; color: #7A5B2C; "
-            "border: 1px solid #E3C88A; border-radius: 8px; min-height: 52px; "
-            "font-style: italic;"
-        )
         self.transcription_label.setStyleSheet(self._transcription_style_final)
         layout.addWidget(self.transcription_label)
         layout.addStretch()
@@ -1271,7 +1314,7 @@ class BloviateUI(QMainWindow):
         scroll.setObjectName("SettingsScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.viewport().setStyleSheet("background-color: #F7F3EA;")
+        scroll.viewport().setStyleSheet(f"background-color: {self._theme['colors']['window']};")
         content = QWidget()
         content.setObjectName("SettingsContent")
         layout = QVBoxLayout(content)
@@ -1307,6 +1350,55 @@ class BloviateUI(QMainWindow):
         self.open_automation_button.clicked.connect(lambda: self._request_permission("automation"))
         self.refresh_permissions_button.clicked.connect(self._refresh_permissions)
 
+        # Appearance
+        appearance_group = QGroupBox("Appearance")
+        appearance_layout = QFormLayout(appearance_group)
+        appearance_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self.theme_combo = QComboBox()
+        for theme_id, label in theme_options():
+            self.theme_combo.addItem(label, theme_id)
+        self._set_combo_data(self.theme_combo, self._theme_id)
+
+        waveform_cfg = self.config.get("ui", {}).get("waveform", {})
+        if not isinstance(waveform_cfg, dict):
+            waveform_cfg = {}
+        self.waveform_preset_combo = QComboBox()
+        for preset_id, label in waveform_preset_options():
+            self.waveform_preset_combo.addItem(label, preset_id)
+        self._set_combo_data(
+            self.waveform_preset_combo,
+            normalize_waveform_preset_id(waveform_cfg.get("preset", "theme")),
+        )
+        waveform = self._waveform_palette()
+        self.waveform_idle_edit = self._color_line_edit(waveform.get("idle", "#BFB2A1"))
+        self.waveform_recording_edit = self._color_line_edit(waveform.get("recording", "#E7C873"))
+        self.waveform_command_edit = self._color_line_edit(waveform.get("command", "#2D6B6B"))
+        self.waveform_accepted_edit = self._color_line_edit(waveform.get("accepted", "#2F7D4F"))
+        self.waveform_rejected_edit = self._color_line_edit(waveform.get("rejected", "#B23B35"))
+        self.waveform_processing_edit = QLineEdit(", ".join(waveform.get("processing", [])))
+        self.waveform_processing_edit.setPlaceholderText("#E7C873, #8E5CF7, #2D6B6B")
+
+        appearance_layout.addRow("Theme:", self.theme_combo)
+        appearance_layout.addRow("Waveform preset:", self.waveform_preset_combo)
+        appearance_layout.addRow("Idle bars:", self._color_field_widget(self.waveform_idle_edit))
+        appearance_layout.addRow("Listening bars:", self._color_field_widget(self.waveform_recording_edit))
+        appearance_layout.addRow("Command bars:", self._color_field_widget(self.waveform_command_edit))
+        appearance_layout.addRow("Accepted bars:", self._color_field_widget(self.waveform_accepted_edit))
+        appearance_layout.addRow("Rejected bars:", self._color_field_widget(self.waveform_rejected_edit))
+        appearance_layout.addRow("Processing colors:", self.waveform_processing_edit)
+        appearance_actions = QHBoxLayout()
+        self.apply_appearance_button = QPushButton("Apply Appearance")
+        appearance_actions.addWidget(self.apply_appearance_button)
+        appearance_actions.addStretch()
+        appearance_layout.addRow("", appearance_actions)
+        self.appearance_status_label = QLabel("")
+        self.appearance_status_label.setStyleSheet(self._settings_status_default_style)
+        appearance_layout.addRow("", self.appearance_status_label)
+        layout.addWidget(appearance_group)
+        self.theme_combo.currentIndexChanged.connect(self._preview_theme_selection)
+        self.waveform_preset_combo.currentIndexChanged.connect(self._preview_waveform_preset)
+        self.apply_appearance_button.clicked.connect(self._apply_appearance_settings)
+
         # Insights
         insights_group = QGroupBox("Insights")
         insights_layout = QVBoxLayout(insights_group)
@@ -1333,6 +1425,7 @@ class BloviateUI(QMainWindow):
         self.insight_wpm_value = QLabel("0")
         self.insight_wpm_value.setObjectName("InsightNumber")
         self.insight_wpm_gauge = InsightGauge()
+        self.insight_wpm_gauge.set_theme_colors(self._theme["colors"])
         self.insight_wpm_card.layout.addWidget(self.insight_wpm_value)
         self.insight_wpm_card.layout.addWidget(self.insight_wpm_gauge)
         insights_grid.addWidget(self.insight_wpm_card, 0, 0)
@@ -1382,6 +1475,7 @@ class BloviateUI(QMainWindow):
         streak_header.addStretch()
         streak_header.addWidget(self.insight_longest_streak_label)
         self.insight_streak_heatmap = InsightStreakHeatmap()
+        self.insight_streak_heatmap.set_theme_colors(self._theme["colors"])
         self.insight_streak_card.layout.addLayout(streak_header)
         self.insight_streak_card.layout.addWidget(self.insight_streak_heatmap)
         insights_grid.addWidget(self.insight_streak_card, 1, 2)
@@ -2119,6 +2213,103 @@ class BloviateUI(QMainWindow):
         layout.addWidget(status_label)
         return widget
 
+    def _color_line_edit(self, value: str) -> QLineEdit:
+        edit = QLineEdit(normalize_hex(value, "#000000"))
+        edit.setMaxLength(7)
+        edit.setMinimumWidth(110)
+        edit.setPlaceholderText("#2D6B6B")
+        return edit
+
+    def _color_field_widget(self, line_edit: QLineEdit) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        button = QPushButton("Pick")
+        button.clicked.connect(lambda _checked=False, edit=line_edit: self._choose_color(edit))
+        layout.addWidget(line_edit)
+        layout.addWidget(button)
+        layout.addStretch()
+        return widget
+
+    def _choose_color(self, line_edit: QLineEdit):
+        initial = QColor(normalize_hex(line_edit.text(), "#2D6B6B"))
+        color = QColorDialog.getColor(initial, self, "Choose waveform color")
+        if color.isValid():
+            line_edit.setText(color.name().upper())
+
+    def _waveform_palette(self) -> dict:
+        return waveform_palette_for_config(self.config)
+
+    def _current_waveform_values_from_fields(self) -> dict:
+        theme_id = self.theme_combo.currentData() if hasattr(self, "theme_combo") else self._theme_id
+        fallback = waveform_values_for_preset(theme_id, "theme")
+        processing = [
+            part.strip()
+            for part in self.waveform_processing_edit.text().split(",")
+            if part.strip()
+        ]
+        processing = [
+            normalize_hex(part, "")
+            for part in processing
+            if normalize_hex(part, "")
+        ]
+        return {
+            "idle": normalize_hex(self.waveform_idle_edit.text(), fallback["idle"]),
+            "recording": normalize_hex(self.waveform_recording_edit.text(), fallback["recording"]),
+            "command": normalize_hex(self.waveform_command_edit.text(), fallback["command"]),
+            "accepted": normalize_hex(self.waveform_accepted_edit.text(), fallback["accepted"]),
+            "rejected": normalize_hex(self.waveform_rejected_edit.text(), fallback["rejected"]),
+            "quiet": normalize_hex(self.waveform_idle_edit.text(), fallback["quiet"]),
+            "background": fallback["background"],
+            "text": fallback["text"],
+            "processing": processing or list(fallback["processing"]),
+        }
+
+    def _set_waveform_fields(self, values: dict):
+        self.waveform_idle_edit.setText(str(values.get("idle", "#BFB2A1")).upper())
+        self.waveform_recording_edit.setText(str(values.get("recording", "#E7C873")).upper())
+        self.waveform_command_edit.setText(str(values.get("command", "#2D6B6B")).upper())
+        self.waveform_accepted_edit.setText(str(values.get("accepted", "#2F7D4F")).upper())
+        self.waveform_rejected_edit.setText(str(values.get("rejected", "#B23B35")).upper())
+        self.waveform_processing_edit.setText(", ".join(values.get("processing", [])))
+
+    def _preview_theme_selection(self):
+        theme_id = normalize_theme_id(self.theme_combo.currentData())
+        self.apply_theme(theme_id)
+        if self.waveform_preset_combo.currentData() == "theme":
+            self._set_waveform_fields(waveform_values_for_preset(theme_id, "theme"))
+        self._apply_waveform_palette_preview()
+
+    def _preview_waveform_preset(self):
+        preset_id = normalize_waveform_preset_id(self.waveform_preset_combo.currentData())
+        if preset_id != "custom":
+            self._set_waveform_fields(
+                waveform_values_for_preset(self.theme_combo.currentData(), preset_id)
+            )
+        self._apply_waveform_palette_preview()
+
+    def _apply_waveform_palette_preview(self):
+        original = self.config.setdefault("ui", {}).get("waveform", {})
+        theme_id = normalize_theme_id(self.theme_combo.currentData() if hasattr(self, "theme_combo") else self._theme_id)
+        preset_id = normalize_waveform_preset_id(
+            self.waveform_preset_combo.currentData() if hasattr(self, "waveform_preset_combo") else "theme"
+        )
+        preview_config = {"ui": {"theme": theme_id, "waveform": {"preset": preset_id}}}
+        if preset_id == "custom":
+            preview_config["ui"]["waveform"].update(self._current_waveform_values_from_fields())
+        palette = waveform_palette_for_config(preview_config)
+        self._apply_waveform_palette(palette)
+        self.config.setdefault("ui", {})["waveform"] = original
+
+    def _apply_waveform_palette(self, palette: dict):
+        if hasattr(self, "audio_bar"):
+            self.audio_bar.set_waveform_palette(palette)
+        if self.menu_bar_indicator:
+            self.menu_bar_indicator.set_waveform_palette(palette)
+        if self.ptt_overlay:
+            self.ptt_overlay.set_waveform_palette(palette)
+
     def _model_combo(self, option_key: str, current_value: str) -> QComboBox:
         combo = QComboBox()
         current = str(current_value or "").strip()
@@ -2134,6 +2325,34 @@ class BloviateUI(QMainWindow):
             combo.addItem(current, current)
         self._set_combo_data(combo, current)
         return combo
+
+    def _apply_appearance_settings(self):
+        theme_id = normalize_theme_id(self.theme_combo.currentData())
+        preset_id = normalize_waveform_preset_id(self.waveform_preset_combo.currentData())
+        updates = {
+            "ui.theme": theme_id,
+            "ui.waveform.preset": preset_id,
+        }
+        if preset_id == "custom":
+            values = self._current_waveform_values_from_fields()
+            for key in ("idle", "recording", "command", "accepted", "rejected", "quiet", "background", "text"):
+                updates[f"ui.waveform.{key}"] = values[key]
+            updates["ui.waveform.processing"] = values["processing"]
+        callback = self.set_general_settings
+        if not callback:
+            self._set_settings_status(self.appearance_status_label, "Appearance updates unavailable.", ok=False)
+            return
+        ok, message = callback(updates)
+        if ok:
+            ui_config = self.config.setdefault("ui", {})
+            ui_config["theme"] = theme_id
+            waveform_config = ui_config.setdefault("waveform", {})
+            waveform_config["preset"] = preset_id
+            if preset_id == "custom":
+                waveform_config.update(self._current_waveform_values_from_fields())
+            self.apply_theme(theme_id)
+            self._apply_waveform_palette(self._waveform_palette())
+        self._set_settings_status(self.appearance_status_label, message, ok=ok)
 
     def _apply_hotkey_settings(self):
         voice_prefixes = [
@@ -2972,10 +3191,11 @@ class BloviateUI(QMainWindow):
             return
         ok, text = self.run_doctor_text()
         self.doctor_output.setPlainText(text)
+        colors = self._theme["colors"]
         if ok:
-            self.doctor_output.setStyleSheet("color: #26211D;")
+            self.doctor_output.setStyleSheet(f"color: {colors['text']};")
         else:
-            self.doctor_output.setStyleSheet("color: #B23B35;")
+            self.doctor_output.setStyleSheet(f"color: {colors['danger']};")
 
     def _reset_defaults(self):
         if not self.reset_settings_to_defaults:
@@ -2992,7 +3212,8 @@ class BloviateUI(QMainWindow):
             return
         ok, message = self.reset_settings_to_defaults()
         self.doctor_output.setPlainText(message)
-        self.doctor_output.setStyleSheet("color: #26211D;" if ok else "color: #B23B35;")
+        colors = self._theme["colors"]
+        self.doctor_output.setStyleSheet(f"color: {colors['text' if ok else 'danger']};")
 
     def _toggle_show_window_on_startup(self, state: int):
         enabled = state == Qt.CheckState.Checked.value
@@ -3069,276 +3290,315 @@ class BloviateUI(QMainWindow):
         return (
             "font-size: 15px; font-weight: 700; padding: 10px 14px; "
             f"background-color: {background}; color: {color}; "
-            "border: 1px solid #D8CCBA; border-radius: 8px;"
+            f"border: 1px solid {self._theme['colors']['border']}; border-radius: 8px;"
         )
 
     def set_light_theme(self):
-        """Apply the polished default light theme."""
+        """Apply the configured app theme."""
+        self.apply_theme(self.config.get("ui", {}).get("theme", "light"))
+
+    def set_dark_theme(self):
+        """Compatibility wrapper for older callers."""
+        self.apply_theme("graphite")
+
+    def apply_theme(self, theme_id: str | None = None):
+        """Apply a named theme to the dashboard and settings chrome."""
+        self._theme_id = normalize_theme_id(theme_id or self._theme_id)
+        self._theme = get_theme(self._theme_id)
+        colors = self._theme["colors"]
+
         palette = QPalette()
-        palette.setColor(QPalette.ColorRole.Window, QColor("#F7F3EA"))
-        palette.setColor(QPalette.ColorRole.WindowText, QColor("#26211D"))
-        palette.setColor(QPalette.ColorRole.Base, QColor("#FFFDF7"))
-        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#F1E9DB"))
-        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#26211D"))
-        palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#FFFDF7"))
-        palette.setColor(QPalette.ColorRole.Text, QColor("#26211D"))
-        palette.setColor(QPalette.ColorRole.Button, QColor("#FFFDF7"))
-        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#26211D"))
-        palette.setColor(QPalette.ColorRole.BrightText, QColor("#B23B35"))
-        palette.setColor(QPalette.ColorRole.Link, QColor("#2D6B6B"))
-        palette.setColor(QPalette.ColorRole.Highlight, QColor("#2D6B6B"))
-        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#FFFFFF"))
+        palette.setColor(QPalette.ColorRole.Window, QColor(colors["window"]))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(colors["text"]))
+        palette.setColor(QPalette.ColorRole.Base, QColor(colors["surface"]))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(colors["surface_alt"]))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(colors["text"]))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor(colors["surface"]))
+        palette.setColor(QPalette.ColorRole.Text, QColor(colors["text"]))
+        palette.setColor(QPalette.ColorRole.Button, QColor(colors["surface"]))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor(colors["text"]))
+        palette.setColor(QPalette.ColorRole.BrightText, QColor(colors["danger"]))
+        palette.setColor(QPalette.ColorRole.Link, QColor(colors["primary"]))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(colors["selection"]))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(colors["primary_text"]))
         self.setPalette(palette)
-        QApplication.instance().setPalette(palette)
-        self.setStyleSheet(
-            """
-            QMainWindow, QWidget#AppRoot, QWidget#SettingsContent, QStackedWidget {
-                background: #F7F3EA;
-                color: #26211D;
-            }
-            QWidget#TopNav {
-                background: #F7F3EA;
-            }
-            QPushButton#NavButton {
-                background: #E8DFD0;
-                color: #37312B;
+        if QApplication.instance():
+            QApplication.instance().setPalette(palette)
+
+        self._settings_status_default_style = f"font-size: 12px; color: {colors['muted']};"
+        self._settings_ok_style = f"font-size: 12px; color: {colors['success']}; font-weight: 600;"
+        self._settings_error_style = f"font-size: 12px; color: {colors['danger']}; font-weight: 600;"
+        self._transcription_style_final = (
+            f"padding: 14px; background-color: {colors['surface']}; color: {colors['text']}; "
+            f"border: 1px solid {colors['border']}; border-radius: 8px; min-height: 52px;"
+        )
+        self._transcription_style_interim = (
+            f"padding: 14px; background-color: {colors['surface_alt']}; color: {colors['warning']}; "
+            f"border: 1px solid {colors['warning']}; border-radius: 8px; min-height: 52px; "
+            "font-style: italic;"
+        )
+        self.setStyleSheet(self._style_sheet_for_theme(colors))
+        self._apply_dynamic_theme_styles()
+
+    def _style_sheet_for_theme(self, colors: dict) -> str:
+        return f"""
+            QMainWindow, QWidget#AppRoot, QWidget#SettingsContent, QStackedWidget {{
+                background: {colors['window']};
+                color: {colors['text']};
+            }}
+            QWidget#TopNav {{
+                background: {colors['window']};
+            }}
+            QPushButton#NavButton {{
+                background: {colors['nav']};
+                color: {colors['text_soft']};
                 min-width: 140px;
                 padding: 13px 24px;
-                border: 1px solid #D8CCBA;
+                border: 1px solid {colors['border']};
                 border-radius: 8px;
                 font-size: 15px;
                 font-weight: 700;
-            }
-            QPushButton#NavButton:checked {
-                background: #2D6B6B;
-                color: #FFFFFF;
-                border-color: #2D6B6B;
-            }
-            QPushButton#NavButton:hover {
-                background: #DCD2C2;
-            }
-            QPushButton#NavButton:checked:hover {
-                background: #2D6B6B;
-            }
-            QPushButton#PrimaryActionButton {
-                background: #2D6B6B;
-                color: #FFFFFF;
-                border: 1px solid #2D6B6B;
+            }}
+            QPushButton#NavButton:checked {{
+                background: {colors['primary']};
+                color: {colors['primary_text']};
+                border-color: {colors['primary']};
+            }}
+            QPushButton#NavButton:hover {{
+                background: {colors['nav_hover']};
+            }}
+            QPushButton#NavButton:checked:hover {{
+                background: {colors['primary_hover']};
+            }}
+            QPushButton#PrimaryActionButton {{
+                background: {colors['primary']};
+                color: {colors['primary_text']};
+                border: 1px solid {colors['primary']};
                 border-radius: 8px;
                 padding: 10px 18px;
                 font-weight: 800;
-            }
-            QPushButton#PrimaryActionButton:hover {
-                background: #245C5C;
-            }
-            QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
-                background: #F7F3EA;
+            }}
+            QPushButton#PrimaryActionButton:hover {{
+                background: {colors['primary_hover']};
+            }}
+            QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {{
+                background: {colors['window']};
                 border: 0;
-            }
-            QGroupBox {
-                background: #FFFDF7;
-                border: 1px solid #DDD2C1;
+            }}
+            QGroupBox {{
+                background: {colors['card']};
+                border: 1px solid {colors['border']};
                 border-radius: 8px;
                 margin-top: 22px;
                 padding: 18px 18px 16px 18px;
                 font-weight: 700;
-            }
-            QGroupBox::title {
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
                 left: 12px;
                 padding: 0 6px;
-                color: #26211D;
-                background: #F7F3EA;
-            }
-            QLabel {
-                color: #26211D;
-            }
-            QFrame#InsightCard {
-                background: #F8F3EA;
-                border: 1px solid #E0D6C7;
+                color: {colors['text']};
+                background: {colors['window']};
+            }}
+            QLabel {{
+                color: {colors['text']};
+            }}
+            QFrame#InsightCard {{
+                background: {colors['card_alt']};
+                border: 1px solid {colors['border']};
                 border-radius: 8px;
-            }
-            QLabel#InsightSectionTitle {
+            }}
+            QLabel#InsightSectionTitle {{
                 font-size: 18px;
                 font-weight: 800;
-                color: #26211D;
-            }
-            QLabel#InsightTitle {
+                color: {colors['text']};
+            }}
+            QLabel#InsightTitle {{
                 font-size: 12px;
                 font-weight: 800;
                 letter-spacing: 0;
-                color: #514941;
+                color: {colors['text_soft']};
                 text-transform: uppercase;
-            }
-            QLabel#InsightSubtitle {
+            }}
+            QLabel#InsightSubtitle {{
                 font-size: 11px;
                 font-weight: 700;
-                color: #6F665E;
-            }
-            QLabel#InsightNumber {
+                color: {colors['muted']};
+            }}
+            QLabel#InsightNumber {{
                 font-size: 28px;
                 font-weight: 800;
-                color: #26211D;
-            }
-            QLabel#InsightNumberSmall {
+                color: {colors['text']};
+            }}
+            QLabel#InsightNumberSmall {{
                 font-size: 22px;
                 font-weight: 800;
-                color: #26211D;
-            }
-            QLineEdit, QTextEdit, QComboBox, QTableWidget {
-                background: #FFFFFF;
-                color: #26211D;
-                border: 1px solid #CFC3B2;
+                color: {colors['text']};
+            }}
+            QLineEdit, QTextEdit, QComboBox, QTableWidget {{
+                background: {colors['surface']};
+                color: {colors['text']};
+                border: 1px solid {colors['border_strong']};
                 border-radius: 6px;
                 padding: 7px 9px;
-                selection-background-color: #2D6B6B;
-                selection-color: #FFFFFF;
-            }
-            QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
-                border: 1px solid #2D6B6B;
-            }
-            QLineEdit::placeholder {
-                color: #8E8376;
-            }
-            QComboBox::drop-down {
+                selection-background-color: {colors['selection']};
+                selection-color: {colors['primary_text']};
+            }}
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus {{
+                border: 1px solid {colors['primary']};
+            }}
+            QLineEdit::placeholder {{
+                color: {colors['placeholder']};
+            }}
+            QComboBox::drop-down {{
                 border: 0;
                 width: 26px;
-            }
-            QPushButton {
-                background-color: #FFFDF7;
-                color: #26211D;
-                border: 1px solid #2E332F;
+            }}
+            QPushButton {{
+                background-color: {colors['surface']};
+                color: {colors['text']};
+                border: 1px solid {colors['border_strong']};
                 border-radius: 6px;
                 padding: 7px 14px;
                 font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: #F1E9DB;
-            }
-            QPushButton:pressed {
-                background-color: #E8DFD0;
-            }
-            QPushButton:disabled {
-                background-color: #E3DBCE;
-                color: #6F665E;
-                border-color: #D8D0C2;
-            }
-            QCheckBox {
-                color: #26211D;
+            }}
+            QPushButton:hover {{
+                background-color: {colors['surface_alt']};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors['nav']};
+            }}
+            QPushButton:disabled {{
+                background-color: {colors['surface_alt']};
+                color: {colors['muted']};
+                border-color: {colors['border']};
+            }}
+            QCheckBox {{
+                color: {colors['text']};
                 spacing: 8px;
-            }
-            QCheckBox::indicator {
+            }}
+            QCheckBox::indicator {{
                 width: 18px;
                 height: 18px;
                 border-radius: 5px;
-                border: 1px solid #BFB2A1;
-                background: #FFFFFF;
-            }
-            QCheckBox::indicator:checked {
-                background: #2D6B6B;
-                border-color: #2D6B6B;
-            }
-            QTableWidget {
-                gridline-color: #E5DBC9;
-                alternate-background-color: #F7F1E7;
-            }
-            QHeaderView::section {
-                background: #E9E1D3;
-                color: #26211D;
+                border: 1px solid {colors['border_strong']};
+                background: {colors['surface']};
+            }}
+            QCheckBox::indicator:checked {{
+                background: {colors['primary']};
+                border-color: {colors['primary']};
+            }}
+            QTableWidget {{
+                gridline-color: {colors['border']};
+                alternate-background-color: {colors['card_alt']};
+            }}
+            QHeaderView::section {{
+                background: {colors['nav']};
+                color: {colors['text']};
                 border: 0;
-                border-right: 1px solid #D8CCBA;
+                border-right: 1px solid {colors['border']};
                 padding: 7px 9px;
                 font-weight: 700;
-            }
-            QProgressBar {
-                background: #FFFFFF;
-                border: 1px solid #CFC3B2;
+            }}
+            QProgressBar {{
+                background: {colors['surface']};
+                border: 1px solid {colors['border_strong']};
                 border-radius: 6px;
-                color: #26211D;
+                color: {colors['text']};
                 text-align: center;
                 min-height: 24px;
-            }
-            QProgressBar::chunk {
-                background-color: #2D6B6B;
+            }}
+            QProgressBar::chunk {{
+                background-color: {colors['primary']};
                 border-radius: 5px;
-            }
-            QSlider::groove:horizontal {
-                background: #E2D7C6;
+            }}
+            QSlider::groove:horizontal {{
+                background: {colors['surface_alt']};
                 height: 7px;
                 border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                background: #FFFFFF;
-                border: 1px solid #BFB2A1;
+            }}
+            QSlider::handle:horizontal {{
+                background: {colors['surface']};
+                border: 1px solid {colors['border_strong']};
                 width: 20px;
                 margin: -7px 0;
                 border-radius: 10px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #2D6B6B;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {colors['primary']};
                 border-radius: 3px;
-            }
-            QScrollBar:vertical {
-                background: #F1E9DB;
+            }}
+            QScrollBar:vertical {{
+                background: {colors['surface_alt']};
                 width: 12px;
                 margin: 0;
                 border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background: #BFB2A1;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {colors['border_strong']};
                 min-height: 36px;
                 border-radius: 6px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                 height: 0;
-            }
-            QFrame#AchievementOverlay {
-                background-color: rgba(38, 33, 29, 160);
-            }
-            QFrame#AchievementOverlayCard {
-                background: #FFFDF7;
-                border: 1px solid #D8CCBA;
+            }}
+            QFrame#AchievementOverlay {{
+                background-color: {colors['overlay']};
+            }}
+            QFrame#AchievementOverlayCard {{
+                background: {colors['surface']};
+                border: 1px solid {colors['border']};
                 border-radius: 16px;
                 min-width: 440px;
                 max-width: 560px;
-            }
-            QLabel#AchievementOverlayTitle {
-                color: #26211D;
+            }}
+            QLabel#AchievementOverlayTitle {{
+                color: {colors['text']};
                 font-size: 24px;
                 font-weight: 800;
-            }
-            QLabel#AchievementOverlayDescription {
-                color: #514941;
+            }}
+            QLabel#AchievementOverlayDescription {{
+                color: {colors['text_soft']};
                 font-size: 14px;
                 font-weight: 600;
-            }
-            QLabel#AchievementOverlayProgress {
-                color: #2D6B6B;
+            }}
+            QLabel#AchievementOverlayProgress {{
+                color: {colors['primary']};
                 font-size: 13px;
                 font-weight: 800;
-            }
-            """
-        )
+            }}
+        """
 
-    def set_dark_theme(self):
-        """Apply dark theme to the application."""
-        palette = QPalette()
-        palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
-        palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
-        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
-        palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
-        palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
-        palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
-        palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-        palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
-
-        self.setPalette(palette)
+    def _apply_dynamic_theme_styles(self):
+        colors = self._theme["colors"]
+        if hasattr(self, "settings_tab") and self.settings_tab.layout():
+            for scroll in self.settings_tab.findChildren(QScrollArea):
+                scroll.viewport().setStyleSheet(f"background-color: {colors['window']};")
+        if hasattr(self, "status_label"):
+            self.status_label.setStyleSheet(f"font-style: italic; color: {colors['muted']}; padding: 8px;")
+        if hasattr(self, "transcription_label"):
+            self.transcription_label.setStyleSheet(self._transcription_style_final)
+        if hasattr(self, "insight_wpm_gauge"):
+            self.insight_wpm_gauge.set_theme_colors(colors)
+        if hasattr(self, "insight_streak_heatmap"):
+            self.insight_streak_heatmap.set_theme_colors(colors)
+        if hasattr(self, "ptt_label") and "Inactive" in self.ptt_label.text():
+            self.ptt_label.setStyleSheet(self._status_pill_style(colors["nav"], colors["text"]))
+        if hasattr(self, "command_label") and "Inactive" in self.command_label.text():
+            self.command_label.setStyleSheet(self._status_pill_style(colors["nav"], colors["text"]))
+        for attr in (
+            "permissions_status_label", "insights_status_label", "achievement_status_label",
+            "achievement_recent_label", "device_status_label", "hotkey_status_label",
+            "voice_profile_label", "voice_settings_status_label", "dictation_status_label",
+            "openai_key_source_label", "deepgram_key_source_label", "model_status_label",
+            "cleanup_status_label", "dictionary_path_label", "dictionary_status_label",
+            "history_status_label", "startup_status_label", "paths_label",
+            "appearance_status_label",
+        ):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setStyleSheet(self._settings_status_default_style)
 
     def _update_audio_level(self, level: float):
         """Update the audio level bar."""
@@ -3354,9 +3614,10 @@ class BloviateUI(QMainWindow):
 
     def _update_ptt_status(self, is_active: bool):
         """Update PTT status indicator."""
+        colors = self._theme["colors"]
         if is_active:
             self.ptt_label.setText("PTT: ACTIVE")
-            self.ptt_label.setStyleSheet(self._status_pill_style("#2F7D4F", "#FFFFFF"))
+            self.ptt_label.setStyleSheet(self._status_pill_style(colors["success"], colors["primary_text"]))
             if hasattr(self, "toggle_dictation_button"):
                 self.toggle_dictation_button.setText("Stop Dictation")
             # Update menu bar indicator
@@ -3366,18 +3627,19 @@ class BloviateUI(QMainWindow):
                 self.ptt_overlay.set_recording()
         else:
             self.ptt_label.setText("PTT: Inactive")
-            self.ptt_label.setStyleSheet(self._status_pill_style("#E9E1D3", "#24201C"))
+            self.ptt_label.setStyleSheet(self._status_pill_style(colors["nav"], colors["text"]))
             if hasattr(self, "toggle_dictation_button"):
                 self.toggle_dictation_button.setText("Start Dictation")
 
     def _update_command_status(self, message: str, state: str):
         """Update command mode indicator."""
+        colors = self._theme["colors"]
         styles = {
-            "inactive": self._status_pill_style("#E9E1D3", "#24201C"),
-            "listening": self._status_pill_style("#2D6B6B", "#FFFFFF"),
-            "processing": self._status_pill_style("#E7C873", "#24201C"),
-            "recognized": self._status_pill_style("#2F7D4F", "#FFFFFF"),
-            "unrecognized": self._status_pill_style("#B23B35", "#FFFFFF"),
+            "inactive": self._status_pill_style(colors["nav"], colors["text"]),
+            "listening": self._status_pill_style(colors["command"], colors["primary_text"]),
+            "processing": self._status_pill_style(colors["warning"], colors["text"]),
+            "recognized": self._status_pill_style(colors["success"], colors["primary_text"]),
+            "unrecognized": self._status_pill_style(colors["danger"], colors["primary_text"]),
         }
 
         self.command_label.setText(message)
@@ -3409,22 +3671,23 @@ class BloviateUI(QMainWindow):
 
     def _update_voice_match(self, is_match: bool, score: float):
         """Update voice match status."""
+        colors = self._theme["colors"]
         if score < 0:
             self.match_status_label.setText("Talk mode")
-            self.match_status_label.setStyleSheet("color: #6F665E; font-weight: bold;")
+            self.match_status_label.setStyleSheet(f"color: {colors['muted']}; font-weight: bold;")
             self.match_score_label.setText("")
             return
 
         if is_match:
             self.match_status_label.setText("Matched")
-            self.match_status_label.setStyleSheet("color: #2F7D4F; font-weight: bold;")
+            self.match_status_label.setStyleSheet(f"color: {colors['success']}; font-weight: bold;")
             if self.menu_bar_indicator:
                 self.menu_bar_indicator.set_accepted()
             if self.ptt_overlay:
                 self.ptt_overlay.set_accepted()
         else:
             self.match_status_label.setText("Rejected")
-            self.match_status_label.setStyleSheet("color: #B23B35; font-weight: bold;")
+            self.match_status_label.setStyleSheet(f"color: {colors['danger']}; font-weight: bold;")
             # Update menu bar indicator
             if self.menu_bar_indicator:
                 self.menu_bar_indicator.set_rejected()

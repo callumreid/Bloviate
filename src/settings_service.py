@@ -19,6 +19,7 @@ from app_paths import (
     ensure_default_config,
     read_resource_text,
 )
+from ui_themes import normalize_theme_id, normalize_waveform_config
 
 
 RUNTIME_KEY_PREFIX = "__"
@@ -137,8 +138,11 @@ def _migrate_config(data: dict) -> dict:
     is_legacy_config = config_version < 6
 
     ui_config = _config_section(data, "ui")
-    if str(ui_config.get("theme", "")).strip().lower() == "dark":
-        ui_config["theme"] = "light"
+    ui_config["theme"] = normalize_theme_id(ui_config.get("theme", "light"))
+    ui_config["waveform"] = normalize_waveform_config(
+        ui_config.get("waveform", {}),
+        ui_config["theme"],
+    )
     window_size = ui_config.get("window_size")
     width = height = 0
     if isinstance(window_size, (list, tuple)) and len(window_size) >= 2:

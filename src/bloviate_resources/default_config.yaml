@@ -162,6 +162,8 @@ ui:
   show_metrics: true
   window_size: [1180, 860]
   theme: "light"
+  waveform:
+    preset: "theme"  # theme, aurora, citrus, ocean, mono, custom
   permissions_prompt:
     enabled: true
   interim_update_interval_s: 0.15

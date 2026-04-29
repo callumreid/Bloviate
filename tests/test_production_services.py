@@ -57,7 +57,8 @@ class ProductionServiceTests(unittest.TestCase):
 
             config, _ = load_yaml_config(config_path)
 
-            self.assertEqual(config["ui"]["theme"], "light")
+            self.assertEqual(config["ui"]["theme"], "graphite")
+            self.assertEqual(config["ui"]["waveform"]["preset"], "theme")
             self.assertEqual(config["ptt"]["hotkey"], "<cmd>+<option>")
             self.assertTrue(config["history"]["enabled"])
             self.assertTrue(config["achievements"]["enabled"])
