@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QSlider, QCheckBox, QMessageBox, QScrollArea, QLineEdit,
     QTextEdit, QFormLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QFileDialog, QSizePolicy,
-    QGridLayout, QColorDialog
+    QGridLayout, QColorDialog, QButtonGroup
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker, QRectF, QSize
 from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter, QPen
@@ -1273,6 +1273,10 @@ class BloviateUI(QMainWindow):
         self._dictionary_terms = []
         self._dictionary_corrections = []
         self._achievement_rows = []
+        self._achievement_table_limit = max(
+            50,
+            int(config.get("achievements", {}).get("settings_table_limit", 150) or 150),
+        )
         self._achievement_refresh_timer = QTimer(self)
         self._achievement_refresh_timer.setSingleShot(True)
         self._achievement_refresh_timer.timeout.connect(self._refresh_achievements)
@@ -1314,10 +1318,13 @@ class BloviateUI(QMainWindow):
         nav_layout.addStretch()
         self.status_nav_button = QPushButton("Status")
         self.settings_nav_button = QPushButton("Settings")
+        self.nav_button_group = QButtonGroup(self)
+        self.nav_button_group.setExclusive(True)
         for button in (self.status_nav_button, self.settings_nav_button):
             button.setObjectName("NavButton")
             button.setCheckable(True)
             button.setMinimumWidth(140)
+            self.nav_button_group.addButton(button)
         nav_layout.addWidget(self.status_nav_button)
         nav_layout.addWidget(self.settings_nav_button)
         nav_layout.addStretch()
@@ -1329,8 +1336,8 @@ class BloviateUI(QMainWindow):
         self.settings_tab = QWidget()
         self.tabs.addWidget(self.status_tab)
         self.tabs.addWidget(self.settings_tab)
-        self.status_nav_button.clicked.connect(self.show_status_tab)
-        self.settings_nav_button.clicked.connect(self.show_settings_tab)
+        self.status_nav_button.clicked.connect(lambda _checked=False: self.show_status_tab())
+        self.settings_nav_button.clicked.connect(lambda _checked=False: self.show_settings_tab())
         self._build_status_tab()
         self._build_settings_tab()
         self._select_main_page(self.status_tab)
@@ -3226,12 +3233,13 @@ class BloviateUI(QMainWindow):
             self.achievement_recent_label.setText("Recent unlocks will appear here.")
 
         achievements = list(summary.get("achievements", []) or [])
-        self._achievement_rows = achievements
+        visible_achievements = achievements[: self._achievement_table_limit]
+        self._achievement_rows = visible_achievements
         self.achievement_table.setUpdatesEnabled(False)
         try:
             self.achievement_table.setRowCount(0)
-            self.achievement_table.setRowCount(len(achievements))
-            for row_idx, item in enumerate(achievements):
+            self.achievement_table.setRowCount(len(visible_achievements))
+            for row_idx, item in enumerate(visible_achievements):
                 icon_item = QTableWidgetItem()
                 badge_path = str(item.get("badge_path", "") or "")
                 if badge_path:
@@ -3258,7 +3266,12 @@ class BloviateUI(QMainWindow):
 
         self._set_settings_status(
             self.achievement_status_label,
-            f"Showing {len(achievements)} achievement(s).",
+            (
+                f"Showing first {len(visible_achievements)} of {len(achievements)} achievement(s). "
+                "Search or filter to narrow."
+                if len(achievements) > len(visible_achievements)
+                else f"Showing {len(achievements)} achievement(s)."
+            ),
             ok=True,
         )
         self._show_selected_achievement_detail()
@@ -3513,12 +3526,15 @@ class BloviateUI(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
+        already_selected = self.tabs.currentWidget() is self.settings_tab
         self._select_main_page(self.settings_tab)
+        if already_selected:
+            return
         self._refresh_voice_controls()
         self._refresh_dictionary_path()
         self._load_dictionary_editor()
         self._refresh_history()
-        self._refresh_achievements()
+        self._queue_achievement_refresh()
 
     def show_status_tab(self):
         """Bring the status tab into focus."""
