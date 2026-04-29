@@ -958,8 +958,12 @@ class InsightStreakHeatmap(QWidget):
         for idx, color in enumerate(self.heatmap_colors):
             painter.setBrush(QColor(color))
             painter.drawRoundedRect(grid_x + 42 + idx * (cell + 4), legend_y, cell, cell, 3, 3)
-        painter.setPen(QColor("#7C7166"))
-        painter.drawText(grid_x + 42 + len(self._COLORS) * (cell + 4) + 6, legend_y + cell - 1, "More")
+        painter.setPen(QColor(self.theme_colors.get("muted", "#7C7166")))
+        painter.drawText(
+            grid_x + 42 + len(self.heatmap_colors) * (cell + 4) + 6,
+            legend_y + cell - 1,
+            "More",
+        )
         painter.end()
 
 
