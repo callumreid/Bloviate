@@ -137,6 +137,9 @@ def _migrate_config(data: dict) -> dict:
         config_version = 0
     is_legacy_config = config_version < 6
 
+    audio_config = _config_section(data, "audio")
+    audio_config["start_on_launch"] = bool(audio_config.get("start_on_launch", False))
+
     ui_config = _config_section(data, "ui")
     ui_config["theme"] = normalize_theme_id(ui_config.get("theme", "light"))
     ui_config["waveform"] = normalize_waveform_config(

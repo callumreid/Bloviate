@@ -16,6 +16,7 @@ audio:
   chunk_size: 1024
   channels: 1
   device_name: ""  # Blank = first available input device; set e.g. "Scarlett" to prefer a specific mic
+  start_on_launch: false  # Lazy by default so CoreAudio/permissions cannot stall the UI on open
 
 # Push-to-Talk Settings
 ptt:

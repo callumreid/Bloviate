@@ -1223,8 +1223,15 @@ class Bloviate:
         if normalized == "microphone":
             if getattr(self.audio_capture, "stream", None) is not None:
                 return True, "Microphone permission is ready; audio capture is running."
-            self._start_audio_capture_async("permissions")
-            return True, "Starting microphone check. macOS may show a permission prompt."
+            if self._audio_start_in_progress:
+                return False, "Microphone startup is already in progress."
+            ok, message = _open_macos_privacy_pane("microphone")
+            if ok:
+                return True, (
+                    "Opened Microphone privacy settings. Enable Bloviate there, then use "
+                    "Start Dictation or the hotkey to begin capture."
+                )
+            return False, message
 
         if normalized == "accessibility":
             if accessibility_trusted():
@@ -2459,7 +2466,10 @@ class Bloviate:
         self.backfill_achievements()
 
         self.audio_capture.register_callback(self.audio_callback)
-        self._start_audio_capture_async("startup")
+        if bool(self.config.get("audio", {}).get("start_on_launch", False)):
+            self._start_audio_capture_async("startup")
+        elif self.ui_window:
+            self.ui_window.signals.update_status.emit("Ready")
 
         # Start PTT handler
         self._setup_toggle_hotkey()
@@ -2753,9 +2763,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.11</string>
+  <string>0.3.12</string>
   <key>CFBundleVersion</key>
-  <string>0.3.11</string>
+  <string>0.3.12</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>
