@@ -134,7 +134,22 @@ class AchievementTests(unittest.TestCase):
             self.assertTrue(first.exists())
             self.assertGreater(first.stat().st_size, 0)
 
+    def test_badge_renderer_handles_full_catalog_under_qt(self):
+        try:
+            from PyQt6.QtWidgets import QApplication
+        except Exception:
+            self.skipTest("PyQt6 is not installed")
+
+        app = QApplication.instance() or QApplication([])
+        self.assertIsNotNone(app)
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            renderer = AchievementBadgeRenderer(Path(tempdir))
+            for definition in ACHIEVEMENTS:
+                path = renderer.render_badge(definition, unlocked=True, size=64)
+                self.assertTrue(path.exists(), definition.id)
+                self.assertGreater(path.stat().st_size, 0, definition.id)
+
 
 if __name__ == "__main__":
     unittest.main()
-

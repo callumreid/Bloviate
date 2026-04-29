@@ -79,33 +79,40 @@ class AchievementBadgeRenderer:
             accent = QColor("#B8AEA2")
 
         painter = QPainter(image)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
 
-        rect = QRectF(10, 10, size - 20, size - 20)
-        painter.setBrush(background)
-        painter.drawRoundedRect(rect, 34, 34)
+            rect = QRectF(10, 10, size - 20, size - 20)
+            painter.setBrush(background)
+            painter.drawRoundedRect(rect, 34, 34)
 
-        painter.setBrush(primary)
-        painter.drawEllipse(QRectF(28, 28, size - 56, size - 56))
-        painter.setBrush(secondary)
-        painter.drawEllipse(QRectF(42, 42, size - 84, size - 84))
+            painter.setBrush(primary)
+            painter.drawEllipse(QRectF(28, 28, size - 56, size - 56))
+            painter.setBrush(secondary)
+            painter.drawEllipse(QRectF(42, 42, size - 84, size - 84))
 
-        painter.setPen(QPen(accent, 8))
-        painter.drawArc(QRectF(32, 32, size - 64, size - 64), 210 * 16, -300 * 16)
-        painter.setPen(Qt.PenStyle.NoPen)
+            painter.setPen(QPen(accent, 8))
+            painter.drawArc(QRectF(32, 32, size - 64, size - 64), 210 * 16, -300 * 16)
+            painter.setPen(Qt.PenStyle.NoPen)
 
-        self._draw_family(painter, definition, primary, accent, size, QPointF, QPolygonF, QRectF, Qt, QPen)
-        self._draw_motif(painter, definition, accent, size, QRectF, Qt, QPen)
+            self._draw_family(painter, definition, primary, accent, size, QPointF, QPolygonF, QRectF, Qt, QPen)
+            self._draw_motif(painter, definition, accent, size, QRectF, Qt, QPen)
 
-        painter.setPen(QColor("#26211D") if unlocked else QColor("#6F665E"))
-        font = QFont("Arial", 22)
-        font.setBold(True)
-        painter.setFont(font)
-        initials = "".join(part[:1] for part in definition.title.split()[:2]).upper()[:2]
-        painter.drawText(QRectF(0, size - 54, size, 30), Qt.AlignmentFlag.AlignCenter, initials or "?")
-
-        painter.end()
+            painter.setPen(QColor("#26211D") if unlocked else QColor("#6F665E"))
+            font = QFont("Arial", 22)
+            font.setBold(True)
+            painter.setFont(font)
+            initials = "".join(part[:1] for part in definition.title.split()[:2]).upper()[:2]
+            painter.drawText(QRectF(0, size - 54, size, 30), Qt.AlignmentFlag.AlignCenter, initials or "?")
+        except Exception:
+            if painter.isActive():
+                painter.end()
+            path.write_bytes(FALLBACK_PNG)
+            return path
+        finally:
+            if painter.isActive():
+                painter.end()
         image.save(str(path), "PNG")
         return path
 
@@ -153,7 +160,7 @@ class AchievementBadgeRenderer:
                 painter.setPen(Qt.PenStyle.NoPen)
             else:
                 for idx, height in enumerate([28, 52, 82, 58, 34]):
-                    painter.drawRoundedRect(54 + idx * 18, 104 - height / 2, 10, height, 5, 5)
+                    painter.drawRoundedRect(QRectF(54 + idx * 18, 104 - height / 2, 10, height), 5, 5)
             return
 
         if family in {"window", "stack"}:
