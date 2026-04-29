@@ -2206,15 +2206,17 @@ class BloviateUI(QMainWindow):
         self._permissions_prompt_shown = True
         self.show_settings_tab()
         self._refresh_permissions()
-        QMessageBox.information(
-            self,
-            "Bloviate Permissions",
-            (
-                "Bloviate needs microphone access for dictation, Accessibility/Input Monitoring "
-                "for global hotkeys, and Automation/Accessibility for auto-paste. "
-                "Use the Permissions section at the top of Settings to open each macOS prompt."
-            ),
+        message = (
+            "Bloviate needs microphone access for dictation, Accessibility/Input Monitoring "
+            "for global hotkeys, and Automation/Accessibility for auto-paste. "
+            "Use the Permissions section at the top of Settings to open each macOS prompt."
         )
+        self._set_settings_status(self.permissions_status_label, message, ok=False)
+        self.status_label.setText("Permissions needed")
+        if self.ptt_overlay:
+            self.ptt_overlay.show_message("PERMISSIONS", state="rejected", hold_ms=2600)
+        QTimer.singleShot(0, self.raise_)
+        QTimer.singleShot(0, self.activateWindow)
 
     def _refresh_audio_inputs(self):
         """Reload the list of available audio inputs."""

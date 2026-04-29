@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bloviate"
-version = "0.3.6"
+version = "0.3.7"
 description = "Voice-fingerprinting dictation tool for whispering in noisy environments"
 readme = "README.md"
 requires-python = ">=3.10"
