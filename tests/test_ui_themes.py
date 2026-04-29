@@ -12,7 +12,9 @@ if str(SRC_ROOT) not in sys.path:
 from ui_themes import (  # noqa: E402
     THEMES,
     WAVEFORM_PRESETS,
+    is_hidden_theme,
     normalize_theme_id,
+    theme_options,
     waveform_palette_for_config,
 )
 
@@ -28,6 +30,14 @@ class UIThemeTests(unittest.TestCase):
 
     def test_dark_alias_maps_to_graphite(self):
         self.assertEqual(normalize_theme_id("dark"), "graphite")
+
+    def test_hidden_themes_are_opt_in(self):
+        visible_ids = {theme_id for theme_id, _label in theme_options()}
+        all_ids = {theme_id for theme_id, _label in theme_options(include_hidden=True)}
+
+        self.assertNotIn("lounge", visible_ids)
+        self.assertIn("lounge", all_ids)
+        self.assertTrue(is_hidden_theme("lounge"))
 
     def test_waveform_preset_and_custom_palette_resolution(self):
         ocean = waveform_palette_for_config({"ui": {"theme": "light", "waveform": {"preset": "ocean"}}})

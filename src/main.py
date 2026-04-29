@@ -983,6 +983,8 @@ class Bloviate:
         try:
             self.settings_service.update_many(updates)
             self._refresh_runtime_config_views()
+            if any(str(key).startswith("ui.easter_eggs.") for key in updates):
+                self._evaluate_achievements()
             return True, "General settings saved."
         except Exception as exc:
             return False, f"Could not save general settings: {exc}"
@@ -1720,6 +1722,31 @@ class Bloviate:
                 return f"open_app:{app_name}", f"{prefix} {requested}"
         return None, ""
 
+    def _parse_easter_egg_command(self, text: str) -> tuple[Optional[str], str]:
+        """Parse isolated non-output Easter egg commands."""
+        normalized = self._command_key(text)
+        if not normalized:
+            return None, ""
+        command_map = {
+            "bloviate surprise me": "easter:surprise",
+            "surprise me bloviate": "easter:surprise",
+            "show the cows": "easter:cows",
+            "run the cows": "easter:cows",
+            "bloviate show the cows": "easter:cows",
+            "bloviate run the cows": "easter:cows",
+            "activate lounge mode": "easter:theme:lounge",
+            "lounge mode": "easter:theme:lounge",
+            "activate terminal cow": "easter:theme:terminal_cow",
+            "terminal cow mode": "easter:theme:terminal_cow",
+            "activate after dark": "easter:theme:after_dark",
+            "dictation after dark": "easter:theme:after_dark",
+            "activate studio radio": "easter:theme:studio_radio",
+            "studio radio mode": "easter:theme:studio_radio",
+            "open bloviate labs": "easter:about",
+            "show bloviate labs": "easter:about",
+        }
+        return command_map.get(normalized), normalized
+
     def _voice_command_prefixes(self) -> list[str]:
         """Return normalized phrase prefixes that turn dictation into commands."""
         configured = self.config.get("window_management", {}).get(
@@ -1784,6 +1811,12 @@ class Bloviate:
         'screen', 'window', and 'desktop'.
         Returns True if a command was found and executed.
         """
+        command, phrase = self._parse_easter_egg_command(text)
+        if command:
+            print(f"[VOICE CMD] Matched '{phrase}' → {command}")
+            self._execute_voice_command(command, text, status_prefix="Voice")
+            return True
+
         if not self.window_manager:
             return False
 
@@ -1798,13 +1831,23 @@ class Bloviate:
         return False
 
     def _command_display_label(self, command: str) -> str:
+        if command.startswith("easter:theme:"):
+            return command.split(":", 2)[2].replace("_", " ").title()
+        if command == "easter:cows":
+            return "Run Cows"
+        if command == "easter:surprise":
+            return "Surprise"
+        if command == "easter:about":
+            return "Bloviate Labs"
         if command.startswith("open_app:"):
             return f"Open {command.split(':', 1)[1]}"
         return command.replace("_", " ").title()
 
     def _execute_voice_command(self, command: str, original_text: str, status_prefix: str = "Voice"):
         """Execute a voice command and update UI."""
-        if command.startswith("open_app:"):
+        if command.startswith("easter:"):
+            self._execute_easter_egg_command(command)
+        elif command.startswith("open_app:"):
             self.window_manager.open_application(command.split(":", 1)[1])
         elif command.startswith("desktop_"):
             direction = command.replace("desktop_", "")
@@ -1818,6 +1861,56 @@ class Bloviate:
                 "recognized"
             )
             self.ui_window.signals.update_status.emit("Ready")
+
+    def _easter_config(self) -> dict:
+        ui_config = self.config.setdefault("ui", {})
+        easter_config = ui_config.setdefault("easter_eggs", {})
+        if not isinstance(easter_config, dict):
+            easter_config = {}
+            ui_config["easter_eggs"] = easter_config
+        return easter_config
+
+    def _easter_enabled(self) -> bool:
+        return bool(self._easter_config().get("enabled", True))
+
+    def _set_easter_value(self, key: str, value):
+        self._easter_config()[key] = value
+        self.settings_service.update_many({f"ui.easter_eggs.{key}": value})
+        self._refresh_runtime_config_views()
+        self._evaluate_achievements()
+
+    def _increment_easter_counter(self, key: str):
+        current = int(self._easter_config().get(key, 0) or 0)
+        self._set_easter_value(key, current + 1)
+
+    def _execute_easter_egg_command(self, command: str):
+        """Run a non-output Easter egg command."""
+        if not self._easter_enabled():
+            return
+        if command == "easter:surprise":
+            if self.ui_window and hasattr(self.ui_window, "surprise_waveform"):
+                self.ui_window.surprise_waveform()
+            else:
+                self._increment_easter_counter("surprise_count")
+        elif command == "easter:cows":
+            if self.ui_window and hasattr(self.ui_window, "run_cow_runway"):
+                self.ui_window.run_cow_runway()
+            else:
+                self._increment_easter_counter("cow_runs")
+        elif command == "easter:about":
+            if self.ui_window and hasattr(self.ui_window, "show_bloviate_labs"):
+                self.ui_window.show_bloviate_labs()
+            else:
+                self._set_easter_value("about_opened", True)
+        elif command.startswith("easter:theme:"):
+            theme_id = command.split(":", 2)[2]
+            if self.ui_window and hasattr(self.ui_window, "activate_easter_theme"):
+                self.ui_window.activate_easter_theme(theme_id)
+            else:
+                self._set_easter_value("secret_themes_unlocked", True)
+                self._increment_easter_counter("secret_theme_activations")
+                self.settings_service.update_many({"ui.theme": theme_id})
+                self._refresh_runtime_config_views()
 
     def _active_target_context(self) -> dict:
         """Best-effort active app/window metadata for local history."""
@@ -1966,7 +2059,9 @@ class Bloviate:
             )
             if final_text:
                 text = final_text
-                command, _ = self._parse_app_command(final_text)
+                command, _ = self._parse_easter_egg_command(final_text)
+                if not command:
+                    command, _ = self._parse_app_command(final_text)
                 if not command:
                     command, _ = self._parse_prefixed_voice_command(final_text)
                 if not command:
@@ -1997,7 +2092,7 @@ class Bloviate:
 
         if command:
             print(f"[CMD] Recognized command: {command}")
-            if self.window_manager:
+            if command.startswith("easter:") or self.window_manager:
                 self._execute_voice_command(command, text, status_prefix="")
             if self.ui_window:
                 self.ui_window.signals.update_command_status.emit(
@@ -2447,9 +2542,9 @@ exec {shlex.quote(str(command_path))} "$@"
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.3</string>
+  <string>0.3.4</string>
   <key>CFBundleVersion</key>
-  <string>0.3.3</string>
+  <string>0.3.4</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>

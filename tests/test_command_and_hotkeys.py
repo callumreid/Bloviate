@@ -45,6 +45,31 @@ class FakeWindowManager:
         self.opened.append(app_name)
 
 
+class FakeEasterUI:
+    def __init__(self):
+        self.surprises = 0
+        self.cow_runs = 0
+        self.theme_activations = []
+        self.labs_opened = 0
+        self.signals = SimpleNamespace(
+            update_command_status=SimpleNamespace(emit=lambda *_args: None),
+            update_status=SimpleNamespace(emit=lambda *_args: None),
+        )
+
+    def surprise_waveform(self):
+        self.surprises += 1
+
+    def run_cow_runway(self):
+        self.cow_runs += 1
+
+    def activate_easter_theme(self, theme_id):
+        self.theme_activations.append(theme_id)
+        return True
+
+    def show_bloviate_labs(self):
+        self.labs_opened += 1
+
+
 class CommandAndHotkeyTests(unittest.TestCase):
     def _make_app(self):
         app = main.Bloviate.__new__(main.Bloviate)
@@ -114,6 +139,30 @@ class CommandAndHotkeyTests(unittest.TestCase):
 
         self.assertFalse(handled)
         self.assertEqual(app.window_manager.opened, [])
+
+    def test_easter_voice_command_executes_only_when_isolated(self):
+        app = self._make_app()
+        fake_ui = FakeEasterUI()
+        app.ui_window = fake_ui
+        app.window_manager = None
+
+        handled = app._try_voice_command("bloviate surprise me")
+        unhandled = app._try_voice_command("I want Bloviate to surprise me after this sentence")
+
+        self.assertTrue(handled)
+        self.assertFalse(unhandled)
+        self.assertEqual(fake_ui.surprises, 1)
+
+    def test_easter_theme_voice_command_routes_to_ui(self):
+        app = self._make_app()
+        fake_ui = FakeEasterUI()
+        app.ui_window = fake_ui
+        app.window_manager = None
+
+        handled = app._try_voice_command("activate lounge mode")
+
+        self.assertTrue(handled)
+        self.assertEqual(fake_ui.theme_activations, ["lounge"])
 
     def test_toggle_hotkey_does_not_trigger_shorter_ptt_prefix(self):
         handler = PTTHandler(

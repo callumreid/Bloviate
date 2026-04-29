@@ -19,6 +19,7 @@ import numpy as np
 
 from ui_themes import (
     get_theme,
+    is_hidden_theme,
     normalize_hex,
     normalize_theme_id,
     normalize_waveform_preset_id,
@@ -1061,6 +1062,68 @@ class AchievementCelebrationOverlay(QFrame):
             self._render()
 
 
+class CowRunwayOverlay(QFrame):
+    """Short nonblocking cow runway animation for the dashboard."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("CowRunwayOverlay")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._phase = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(85)
+        self._timer.timeout.connect(self._advance)
+        self._close_timer = QTimer(self)
+        self._close_timer.setSingleShot(True)
+        self._close_timer.timeout.connect(self.hide)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 18, 24, 18)
+        layout.addStretch()
+        self.cow_label = QLabel("")
+        self.cow_label.setObjectName("CowRunwayText")
+        self.cow_label.setFont(QFont("Menlo", 13))
+        self.cow_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.cow_label.setMinimumHeight(72)
+        layout.addWidget(self.cow_label)
+        layout.addStretch()
+        self.hide()
+
+    def start(self, duration_ms: int = 3600):
+        if self.parent():
+            self.setGeometry(self.parent().rect())
+        self._phase = 0
+        self.cow_label.setText(self._runway_text())
+        self.show()
+        self.raise_()
+        self._timer.start()
+        self._close_timer.start(max(1200, int(duration_ms)))
+
+    def hide(self):
+        self._timer.stop()
+        self._close_timer.stop()
+        super().hide()
+
+    def _advance(self):
+        self._phase = (self._phase + 2) % 72
+        self.cow_label.setText(self._runway_text())
+
+    def _runway_text(self) -> str:
+        width = 72
+        lines = [" " * width, " " * width, " " * width]
+        frame = ["(__)", "(oo)", "/--\\"]
+        for offset in (0, 18, 36, 55):
+            x = (self._phase + offset) % width
+            for row, part in enumerate(frame):
+                line = lines[row]
+                if x + len(part) <= width:
+                    lines[row] = line[:x] + part + line[x + len(part):]
+                else:
+                    first = width - x
+                    lines[row] = part[first:] + line[len(part) - first:x] + part[:first]
+        return "\n".join(lines)
+
+
 class BloviateUI(QMainWindow):
     """Minimal UI showing real-time feedback."""
 
@@ -1149,6 +1212,7 @@ class BloviateUI(QMainWindow):
         self._theme_id = normalize_theme_id(self.config.get("ui", {}).get("theme", "light"))
         self._theme = get_theme(self._theme_id)
         self.config.setdefault("ui", {})["theme"] = self._theme_id
+        self._title_click_count = 0
 
         # Create menu bar indicator if enabled
         self.menu_bar_indicator = None
@@ -1210,8 +1274,13 @@ class BloviateUI(QMainWindow):
         nav = QWidget()
         nav.setObjectName("TopNav")
         nav_layout = QHBoxLayout(nav)
-        nav_layout.setContentsMargins(0, 18, 0, 10)
+        nav_layout.setContentsMargins(28, 18, 28, 10)
         nav_layout.setSpacing(0)
+        self.app_title_label = QLabel("Bloviate")
+        self.app_title_label.setObjectName("AppTitle")
+        self.app_title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.app_title_label.mousePressEvent = self._handle_title_click
+        nav_layout.addWidget(self.app_title_label)
         nav_layout.addStretch()
         self.status_nav_button = QPushButton("Status")
         self.settings_nav_button = QPushButton("Settings")
@@ -1355,7 +1424,7 @@ class BloviateUI(QMainWindow):
         appearance_layout = QFormLayout(appearance_group)
         appearance_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.theme_combo = QComboBox()
-        for theme_id, label in theme_options():
+        for theme_id, label in theme_options(include_hidden=self._secret_themes_unlocked()):
             self.theme_combo.addItem(label, theme_id)
         self._set_combo_data(self.theme_combo, self._theme_id)
 
@@ -1377,6 +1446,9 @@ class BloviateUI(QMainWindow):
         self.waveform_rejected_edit = self._color_line_edit(waveform.get("rejected", "#B23B35"))
         self.waveform_processing_edit = QLineEdit(", ".join(waveform.get("processing", [])))
         self.waveform_processing_edit.setPlaceholderText("#E7C873, #8E5CF7, #2D6B6B")
+        easter_cfg = self._easter_config()
+        self.milestone_toasts_checkbox = QCheckBox("Milestone achievement toasts")
+        self.milestone_toasts_checkbox.setChecked(bool(easter_cfg.get("milestone_toasts", True)))
 
         appearance_layout.addRow("Theme:", self.theme_combo)
         appearance_layout.addRow("Waveform preset:", self.waveform_preset_combo)
@@ -1386,9 +1458,12 @@ class BloviateUI(QMainWindow):
         appearance_layout.addRow("Accepted bars:", self._color_field_widget(self.waveform_accepted_edit))
         appearance_layout.addRow("Rejected bars:", self._color_field_widget(self.waveform_rejected_edit))
         appearance_layout.addRow("Processing colors:", self.waveform_processing_edit)
+        appearance_layout.addRow("", self.milestone_toasts_checkbox)
         appearance_actions = QHBoxLayout()
         self.apply_appearance_button = QPushButton("Apply Appearance")
+        self.run_cows_button = QPushButton("Run Cows")
         appearance_actions.addWidget(self.apply_appearance_button)
+        appearance_actions.addWidget(self.run_cows_button)
         appearance_actions.addStretch()
         appearance_layout.addRow("", appearance_actions)
         self.appearance_status_label = QLabel("")
@@ -1398,6 +1473,7 @@ class BloviateUI(QMainWindow):
         self.theme_combo.currentIndexChanged.connect(self._preview_theme_selection)
         self.waveform_preset_combo.currentIndexChanged.connect(self._preview_waveform_preset)
         self.apply_appearance_button.clicked.connect(self._apply_appearance_settings)
+        self.run_cows_button.clicked.connect(self.run_cow_runway)
 
         # Insights
         insights_group = QGroupBox("Insights")
@@ -1490,7 +1566,7 @@ class BloviateUI(QMainWindow):
         achievements_layout.setSpacing(12)
 
         achievements_header = QHBoxLayout()
-        self.achievement_summary_label = QLabel("0 / 528 unlocked")
+        self.achievement_summary_label = QLabel("0 unlocked")
         self.achievement_summary_label.setObjectName("InsightSectionTitle")
         self.achievement_status_label = QLabel("")
         self.achievement_status_label.setStyleSheet(self._settings_status_default_style)
@@ -2204,6 +2280,33 @@ class BloviateUI(QMainWindow):
         text = str(value or "").strip()
         return text or default
 
+    def _easter_config(self) -> dict:
+        ui_config = self.config.setdefault("ui", {})
+        easter_config = ui_config.setdefault("easter_eggs", {})
+        if not isinstance(easter_config, dict):
+            easter_config = {}
+            ui_config["easter_eggs"] = easter_config
+        return easter_config
+
+    def _easter_enabled(self) -> bool:
+        return bool(self._easter_config().get("enabled", True))
+
+    def _secret_themes_unlocked(self) -> bool:
+        return bool(self._easter_config().get("secret_themes_unlocked", False))
+
+    def _increment_easter_counter(self, key: str, *, value: int | None = None):
+        easter_config = self._easter_config()
+        current = int(easter_config.get(key, 0) or 0)
+        easter_config[key] = int(value if value is not None else current + 1)
+        if self.set_general_settings:
+            self.set_general_settings({f"ui.easter_eggs.{key}": easter_config[key]})
+
+    def _set_easter_flag(self, key: str, value: bool):
+        easter_config = self._easter_config()
+        easter_config[key] = bool(value)
+        if self.set_general_settings:
+            self.set_general_settings({f"ui.easter_eggs.{key}": bool(value)})
+
     def _key_field_widget(self, line_edit: QLineEdit, status_label: QLabel) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -2237,6 +2340,112 @@ class BloviateUI(QMainWindow):
         color = QColorDialog.getColor(initial, self, "Choose waveform color")
         if color.isValid():
             line_edit.setText(color.name().upper())
+
+    def _handle_title_click(self, event):
+        if event and event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            self.show_bloviate_labs()
+            return
+        if not self._easter_enabled():
+            return
+        self._title_click_count += 1
+        if self._title_click_count >= 5:
+            self._title_click_count = 0
+            self.unlock_secret_themes(source="title")
+
+    def unlock_secret_themes(self, source: str = "manual") -> bool:
+        if not self._easter_enabled():
+            return False
+        already_unlocked = self._secret_themes_unlocked()
+        if not already_unlocked:
+            self._set_easter_flag("secret_themes_unlocked", True)
+            self._refresh_theme_combo(include_hidden=True)
+        if self.ptt_overlay:
+            self.ptt_overlay.show_message("SECRET THEMES", state="mode", hold_ms=2200)
+        if hasattr(self, "appearance_status_label"):
+            message = "Secret themes unlocked." if not already_unlocked else "Secret themes already unlocked."
+            self._set_settings_status(self.appearance_status_label, message, ok=True)
+        return True
+
+    def _refresh_theme_combo(self, *, include_hidden: bool | None = None):
+        if not hasattr(self, "theme_combo"):
+            return
+        include_hidden = self._secret_themes_unlocked() if include_hidden is None else include_hidden
+        current = self.theme_combo.currentData() or self._theme_id
+        with QSignalBlocker(self.theme_combo):
+            self.theme_combo.clear()
+            for theme_id, label in theme_options(include_hidden=bool(include_hidden)):
+                self.theme_combo.addItem(label, theme_id)
+            self._set_combo_data(self.theme_combo, current)
+
+    def activate_easter_theme(self, theme_id: str) -> bool:
+        theme_id = normalize_theme_id(theme_id)
+        if not is_hidden_theme(theme_id):
+            return False
+        self.unlock_secret_themes(source="voice")
+        if hasattr(self, "theme_combo"):
+            self._set_combo_data(self.theme_combo, theme_id)
+        self.apply_theme(theme_id)
+        self.config.setdefault("ui", {})["theme"] = theme_id
+        self._increment_easter_counter("secret_theme_activations")
+        if self.set_general_settings:
+            self.set_general_settings({"ui.theme": theme_id})
+        if self.ptt_overlay:
+            self.ptt_overlay.show_message(get_theme(theme_id)["label"].upper(), state="mode", hold_ms=2200)
+        if hasattr(self, "appearance_status_label"):
+            self._set_settings_status(self.appearance_status_label, f"Activated {get_theme(theme_id)['label']}.", ok=True)
+        return True
+
+    def show_bloviate_labs(self):
+        self._set_easter_flag("about_opened", True)
+        insights = {}
+        if self.get_history_insights:
+            try:
+                insights = self.get_history_insights() or {}
+            except Exception:
+                insights = {}
+        total_words = self._format_int(insights.get("total_words", 0))
+        total_transcripts = self._format_int(insights.get("total_transcripts", 0))
+        theme_label = self._theme.get("label", self._theme_id)
+        text = (
+            f"<b>Bloviate Labs</b><br><br>"
+            f"Version: {self.config.get('app', {}).get('version', 'local')}<br>"
+            f"Theme: {theme_label}<br>"
+            f"Local words: {total_words}<br>"
+            f"Saved clips: {total_transcripts}<br><br>"
+            "Open source dictation, unusually willing to count things."
+        )
+        QMessageBox.information(self, "Bloviate Labs", text)
+
+    def run_cow_runway(self):
+        if not self._easter_enabled():
+            return
+        self._increment_easter_counter("cow_runs")
+        if not hasattr(self, "cow_runway_overlay"):
+            self.cow_runway_overlay = CowRunwayOverlay(self)
+        self.cow_runway_overlay.start()
+        if self.ptt_overlay:
+            self.ptt_overlay.show_message("COWS", state="mode", hold_ms=1600)
+
+    def surprise_waveform(self):
+        if not self._easter_enabled():
+            return
+        self._increment_easter_counter("surprise_count")
+        original_palette = self._waveform_palette()
+        colors = {
+            "idle": "#8E5CF7",
+            "recording": "#E7C873",
+            "command": "#62A8E5",
+            "accepted": "#6AD49F",
+            "rejected": "#EF6F78",
+            "quiet": "#B9B0C9",
+            "background": original_palette.get("background", "#FFFDF7"),
+            "text": original_palette.get("text", "#26211D"),
+            "processing": ["#E7C873", "#8E5CF7", "#62A8E5", "#6AD49F", "#EF6F78"],
+        }
+        self._apply_waveform_palette(colors)
+        if self.ptt_overlay:
+            self.ptt_overlay.show_message("SURPRISE", state="mode", hold_ms=1800)
+        QTimer.singleShot(3500, lambda: self._apply_waveform_palette(self._waveform_palette()))
 
     def _waveform_palette(self) -> dict:
         return waveform_palette_for_config(self.config)
@@ -2332,6 +2541,7 @@ class BloviateUI(QMainWindow):
         updates = {
             "ui.theme": theme_id,
             "ui.waveform.preset": preset_id,
+            "ui.easter_eggs.milestone_toasts": self.milestone_toasts_checkbox.isChecked(),
         }
         if preset_id == "custom":
             values = self._current_waveform_values_from_fields()
@@ -2346,6 +2556,7 @@ class BloviateUI(QMainWindow):
         if ok:
             ui_config = self.config.setdefault("ui", {})
             ui_config["theme"] = theme_id
+            ui_config.setdefault("easter_eggs", {})["milestone_toasts"] = self.milestone_toasts_checkbox.isChecked()
             waveform_config = ui_config.setdefault("waveform", {})
             waveform_config["preset"] = preset_id
             if preset_id == "custom":
@@ -3349,6 +3560,12 @@ class BloviateUI(QMainWindow):
             QWidget#TopNav {{
                 background: {colors['window']};
             }}
+            QLabel#AppTitle {{
+                color: {colors['text_soft']};
+                font-size: 17px;
+                font-weight: 800;
+                padding: 10px 0;
+            }}
             QPushButton#NavButton {{
                 background: {colors['nav']};
                 color: {colors['text_soft']};
@@ -3568,6 +3785,16 @@ class BloviateUI(QMainWindow):
                 font-size: 13px;
                 font-weight: 800;
             }}
+            QFrame#CowRunwayOverlay {{
+                background-color: {colors['overlay']};
+            }}
+            QLabel#CowRunwayText {{
+                color: {colors['primary']};
+                background: {colors['surface']};
+                border: 1px solid {colors['border']};
+                border-radius: 12px;
+                padding: 12px;
+            }}
         """
 
     def _apply_dynamic_theme_styles(self):
@@ -3752,8 +3979,28 @@ class BloviateUI(QMainWindow):
         """Show batched achievement unlocks and refresh the Settings grid."""
         if hasattr(self, "achievement_overlay"):
             self.achievement_overlay.show_unlocks(unlocks)
+        if (
+            unlocks
+            and self.ptt_overlay
+            and bool(self._easter_config().get("milestone_toasts", True))
+        ):
+            self.ptt_overlay.show_message(self._milestone_toast(unlocks), state="mode", hold_ms=2400)
+            self._increment_easter_counter("milestone_toasts_shown")
         if hasattr(self, "achievement_table"):
             QTimer.singleShot(0, self._refresh_achievements)
+
+    def _milestone_toast(self, unlocks) -> str:
+        titles = [str(item.get("title", "")) for item in list(unlocks or []) if isinstance(item, dict)]
+        joined = " ".join(titles).lower()
+        if "word" in joined or "keyboard" in joined:
+            return "KEYBOARD ALARMED"
+        if "dictionary" in joined:
+            return "DICTIONARY LAWYER"
+        if "command" in joined or "window" in joined:
+            return "REMOTE CONTROL"
+        if "achievement" in joined:
+            return "TROPHY SHELF"
+        return "ACHIEVEMENT"
 
     def _update_interim_transcription(self, text: str):
         """Update interim transcription display while recording."""
@@ -3788,6 +4035,8 @@ class BloviateUI(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "achievement_overlay") and self.achievement_overlay.isVisible():
             self.achievement_overlay.setGeometry(self.rect())
+        if hasattr(self, "cow_runway_overlay") and self.cow_runway_overlay.isVisible():
+            self.cow_runway_overlay.setGeometry(self.rect())
 
 
 class StartupSplash(QWidget):

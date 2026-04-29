@@ -164,6 +164,15 @@ ui:
   theme: "light"
   waveform:
     preset: "theme"  # theme, aurora, citrus, ocean, mono, custom
+  easter_eggs:
+    enabled: true
+    secret_themes_unlocked: false
+    cow_runs: 0
+    surprise_count: 0
+    about_opened: false
+    secret_theme_activations: 0
+    milestone_toasts: true
+    milestone_toasts_shown: 0
   permissions_prompt:
     enabled: true
   interim_update_interval_s: 0.15

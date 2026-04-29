@@ -18,9 +18,9 @@ from history_store import HistoryStore
 
 
 class AchievementTests(unittest.TestCase):
-    def test_catalog_has_528_unique_complete_achievements(self):
-        self.assertEqual(len(ACHIEVEMENTS), 528)
-        self.assertEqual(len({item.id for item in ACHIEVEMENTS}), 528)
+    def test_catalog_has_large_unique_complete_achievement_set(self):
+        self.assertGreaterEqual(len(ACHIEVEMENTS), 528)
+        self.assertEqual(len({item.id for item in ACHIEVEMENTS}), len(ACHIEVEMENTS))
         self.assertGreaterEqual(sum(1 for item in ACHIEVEMENTS if not item.ai_required), 450)
         self.assertEqual(sum(1 for item in ACHIEVEMENTS if item.ai_required), 64)
         for item in ACHIEVEMENTS:
@@ -85,8 +85,40 @@ class AchievementTests(unittest.TestCase):
             )
             self.assertTrue(unlocks)
             summary = service.summary()
-            self.assertEqual(summary["total"], 528)
+            self.assertEqual(summary["total"], len(ACHIEVEMENTS))
             self.assertGreater(summary["unlocked"], 0)
+
+    def test_service_evaluates_easter_egg_metrics_from_config(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "history.sqlite"
+            HistoryStore(db_path)
+            service = AchievementService(
+                {
+                    "achievements": {"enabled": True},
+                    "ui": {
+                        "easter_eggs": {
+                            "secret_themes_unlocked": True,
+                            "cow_runs": 2,
+                            "surprise_count": 1,
+                            "about_opened": True,
+                            "secret_theme_activations": 1,
+                            "milestone_toasts": True,
+                            "milestone_toasts_shown": 1,
+                        }
+                    },
+                },
+                store=AchievementStore(db_path),
+                renderer=AchievementBadgeRenderer(Path(tempdir) / "badges"),
+            )
+
+            metrics = service.metric_values()
+
+            self.assertEqual(metrics["easter_secret_themes"], 1)
+            self.assertEqual(metrics["easter_cow_runs"], 2)
+            self.assertEqual(metrics["easter_surprise_count"], 1)
+            self.assertEqual(metrics["easter_about_opened"], 1)
+            self.assertEqual(metrics["easter_secret_theme_activations"], 1)
+            self.assertEqual(metrics["easter_milestone_toasts_shown"], 1)
 
     def test_ai_analysis_is_opt_in_and_stores_tags_only(self):
         with tempfile.TemporaryDirectory() as tempdir:

@@ -422,6 +422,22 @@ class AchievementService:
             and metrics["command_count"] >= 1
         ) else 0
 
+        easter_config = self.config.get("ui", {}).get("easter_eggs", {})
+        if not isinstance(easter_config, dict):
+            easter_config = {}
+        metrics["easter_secret_themes"] = (
+            1 if easter_config.get("secret_themes_unlocked", False) else 0
+        )
+        metrics["easter_cow_runs"] = self._float(easter_config.get("cow_runs", 0))
+        metrics["easter_surprise_count"] = self._float(easter_config.get("surprise_count", 0))
+        metrics["easter_about_opened"] = 1 if easter_config.get("about_opened", False) else 0
+        metrics["easter_secret_theme_activations"] = self._float(
+            easter_config.get("secret_theme_activations", 0)
+        )
+        metrics["easter_milestone_toasts_shown"] = self._float(
+            easter_config.get("milestone_toasts_shown", 0)
+        )
+
         return dict(metrics)
 
     def _achievement_dict(

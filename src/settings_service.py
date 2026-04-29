@@ -143,6 +143,21 @@ def _migrate_config(data: dict) -> dict:
         ui_config.get("waveform", {}),
         ui_config["theme"],
     )
+    easter_config = ui_config.setdefault("easter_eggs", {})
+    if not isinstance(easter_config, dict):
+        easter_config = {}
+        ui_config["easter_eggs"] = easter_config
+    easter_config["enabled"] = bool(easter_config.get("enabled", True))
+    easter_config["secret_themes_unlocked"] = bool(
+        easter_config.get("secret_themes_unlocked", False)
+    )
+    easter_config["about_opened"] = bool(easter_config.get("about_opened", False))
+    easter_config["milestone_toasts"] = bool(easter_config.get("milestone_toasts", True))
+    for key in ("cow_runs", "surprise_count", "secret_theme_activations", "milestone_toasts_shown"):
+        try:
+            easter_config[key] = max(0, int(easter_config.get(key, 0)))
+        except (TypeError, ValueError):
+            easter_config[key] = 0
     window_size = ui_config.get("window_size")
     width = height = 0
     if isinstance(window_size, (list, tuple)) and len(window_size) >= 2:

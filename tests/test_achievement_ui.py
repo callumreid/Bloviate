@@ -44,7 +44,7 @@ class AchievementUISmokeTests(unittest.TestCase):
             return {
                 "enabled": True,
                 "ai_analysis_enabled": False,
-                "total": 528,
+                "total": 534,
                 "unlocked": 1,
                 "recent": [],
                 "achievements": [
@@ -68,7 +68,7 @@ class AchievementUISmokeTests(unittest.TestCase):
         try:
             window._refresh_achievements()
             self.assertEqual(window.achievement_table.rowCount(), 1)
-            self.assertIn("1 / 528", window.achievement_summary_label.text())
+            self.assertIn("1 / 534", window.achievement_summary_label.text())
         finally:
             window._closing = True
             window.close()
@@ -77,4 +77,3 @@ class AchievementUISmokeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

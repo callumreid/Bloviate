@@ -322,8 +322,72 @@ def build_achievement_catalog() -> list[AchievementDefinition]:
             )
         )
 
-    if len(catalog) != 528:
-        raise RuntimeError(f"Achievement catalog must contain 528 definitions, got {len(catalog)}")
+    easter_specs = [
+        (
+            "easter_secret_themes",
+            "Secret Upholstery Department",
+            "Unlock the hidden themes.",
+            "easter_secret_themes",
+            "chair",
+        ),
+        (
+            "easter_lounge_mode",
+            "The Chair Has Entered The Chat",
+            "Activate a hidden theme.",
+            "easter_secret_theme_activations",
+            "chair",
+        ),
+        (
+            "easter_cow_runway",
+            "Runway Livestock Logistics",
+            "Run the in-app cow runway.",
+            "easter_cow_runs",
+            "cowbell",
+        ),
+        (
+            "easter_surprise_waveform",
+            "Waveform Found The Fun Drawer",
+            "Trigger the surprise waveform.",
+            "easter_surprise_count",
+            "spark",
+        ),
+        (
+            "easter_labs",
+            "Intern At Bloviate Labs",
+            "Open the secret Bloviate Labs panel.",
+            "easter_about_opened",
+            "orbit",
+        ),
+        (
+            "easter_milestone_toasts",
+            "Toast Rack Operational",
+            "See a milestone toast.",
+            "easter_milestone_toasts_shown",
+            "spark",
+        ),
+    ]
+    start = len(catalog)
+    for offset, (achievement_id, title, description, metric, motif) in enumerate(easter_specs):
+        catalog.append(
+            AchievementDefinition(
+                id=achievement_id,
+                title=title,
+                description=description,
+                category="Easter eggs",
+                metric=metric,
+                threshold=1,
+                unit="",
+                tier=offset + 1,
+                rarity="secret",
+                badge_family=BADGE_FAMILIES[(start + offset) % len(BADGE_FAMILIES)],
+                badge_motif=motif,
+                badge_seed=71000 + offset,
+                hidden=True,
+            )
+        )
+
+    if len(catalog) < 528:
+        raise RuntimeError(f"Achievement catalog must contain at least 528 definitions, got {len(catalog)}")
     if len({item.id for item in catalog}) != len(catalog):
         raise RuntimeError("Achievement catalog contains duplicate ids")
     return catalog
