@@ -16,6 +16,7 @@ import subprocess
 import shutil
 import shlex
 import sys
+import sysconfig
 import threading
 import time
 import re
@@ -2507,22 +2508,185 @@ def install_macos_launcher() -> int:
     macos_dir.mkdir(parents=True, exist_ok=True)
 
     executable = macos_dir / "Bloviate"
-    launch_script = f"""#!/bin/zsh
+
+    def c_string(value: str) -> str:
+        import json
+
+        return json.dumps(str(value))
+
+    def python_entrypoint() -> Path:
+        candidate = Path(sys.argv[0]).expanduser()
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve()
+        try:
+            text = command_path.read_text(encoding="utf-8", errors="ignore")
+            match = re.search(r'exec\\s+"([^"]+/libexec/venv/bin/bloviate)"', text)
+            if match:
+                return Path(match.group(1)).resolve()
+        except Exception:
+            pass
+        return command_path.resolve()
+
+    def venv_site_packages() -> str:
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import site; print(site.getsitepackages()[0])",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return result.stdout.strip()
+        except Exception:
+            version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+            return str(Path(sys.prefix) / "lib" / version / "site-packages")
+
+    def write_shell_launcher(reason: str):
+        launch_script = f"""#!/bin/zsh
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 export PYTHONUNBUFFERED=1
 log_dir="$HOME/Library/Application Support/Bloviate/logs"
 mkdir -p "$log_dir"
 exec >>"$log_dir/launcher.log" 2>&1
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] launching Bloviate via {shlex.quote(str(command_path))}"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] launching Bloviate via {shlex.quote(str(command_path))} ({reason})"
 for rc in "$HOME/.zshenv" "$HOME/.zprofile"; do
   if [ -r "$rc" ]; then
     source "$rc" >/dev/null 2>&1
   fi
 done
-exec {shlex.quote(str(command_path))} "$@"
+exec -a Bloviate {shlex.quote(str(command_path))} "$@"
 """
-    executable.write_text(launch_script, encoding="utf-8")
-    executable.chmod(0o755)
+        executable.write_text(launch_script, encoding="utf-8")
+        executable.chmod(0o755)
+
+    def write_native_launcher() -> tuple[bool, str]:
+        cc = shutil.which("cc") or shutil.which("clang")
+        if not cc:
+            return False, "native compiler not found"
+
+        entrypoint = python_entrypoint()
+        site_packages = venv_site_packages()
+        include_dir = sysconfig.get_config_var("INCLUDEPY")
+        lib_dir = sysconfig.get_config_var("LIBPL") or sysconfig.get_config_var("LIBDIR")
+        runtime_lib_dir = sysconfig.get_config_var("LIBDIR") or lib_dir
+        ld_version = sysconfig.get_config_var("LDVERSION") or f"{sys.version_info.major}.{sys.version_info.minor}"
+        if not include_dir or not lib_dir:
+            return False, "Python build flags unavailable"
+
+        source = macos_dir / "BloviateLauncher.c"
+        source.write_text(
+            f"""
+#include <Python.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+static void prepend_env(const char *name, const char *value) {{
+    const char *old_value = getenv(name);
+    if (old_value && old_value[0]) {{
+        size_t needed = strlen(value) + strlen(old_value) + 2;
+        char *combined = (char *)malloc(needed);
+        if (!combined) return;
+        snprintf(combined, needed, "%s:%s", value, old_value);
+        setenv(name, combined, 1);
+        free(combined);
+    }} else {{
+        setenv(name, value, 1);
+    }}
+}}
+
+static void load_shell_env(void) {{
+    FILE *pipe = popen("/bin/zsh -lc 'for rc in \\"$HOME/.zshenv\\" \\"$HOME/.zprofile\\"; do [ -r \\"$rc\\" ] && source \\"$rc\\" >/dev/null 2>&1; done; /usr/bin/env'", "r");
+    if (!pipe) return;
+    char line[8192];
+    while (fgets(line, sizeof(line), pipe)) {{
+        char *eq = strchr(line, '=');
+        if (!eq || eq == line) continue;
+        *eq = '\\0';
+        char *value = eq + 1;
+        value[strcspn(value, "\\r\\n")] = '\\0';
+        if (!getenv(line)) {{
+            setenv(line, value, 0);
+        }}
+    }}
+    pclose(pipe);
+}}
+
+static void setup_logging(void) {{
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/Library/Application Support/Bloviate/logs", home);
+    char mkdir_cmd[8192];
+    snprintf(mkdir_cmd, sizeof(mkdir_cmd), "/bin/mkdir -p \\"%s\\"", dir);
+    system(mkdir_cmd);
+
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/launcher.log", dir);
+    freopen(path, "a", stdout);
+    freopen(path, "a", stderr);
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
+    time_t now = time(NULL);
+    struct tm *local = localtime(&now);
+    char stamp[64] = "";
+    if (local) strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", local);
+    fprintf(stdout, "[%s] launching Bloviate native app via %s\\n", stamp, {c_string(str(entrypoint))});
+}}
+
+int main(int argc, char **argv) {{
+    load_shell_env();
+    setup_logging();
+    prepend_env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+    prepend_env("PYTHONPATH", {c_string(site_packages)});
+    setenv("PYTHONUNBUFFERED", "1", 1);
+    setenv("PYTHONNOUSERSITE", "1", 1);
+    setenv("BLOVIATE_APP_LAUNCHER", "1", 1);
+
+    int py_argc = argc + 1;
+    char **py_argv = (char **)calloc((size_t)py_argc + 1, sizeof(char *));
+    if (!py_argv) return 1;
+    py_argv[0] = "Bloviate";
+    py_argv[1] = {c_string(str(entrypoint))};
+    for (int i = 1; i < argc; i++) {{
+        py_argv[i + 1] = argv[i];
+    }}
+    py_argv[py_argc] = NULL;
+    int code = Py_BytesMain(py_argc, py_argv);
+    free(py_argv);
+    return code;
+}}
+""",
+            encoding="utf-8",
+        )
+        cmd = [
+            cc,
+            str(source),
+            "-o",
+            str(executable),
+            f"-I{include_dir}",
+            f"-L{lib_dir}",
+            f"-Wl,-rpath,{runtime_lib_dir}",
+            f"-lpython{ld_version}",
+            "-ldl",
+            "-framework",
+            "CoreFoundation",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            return False, (result.stderr or result.stdout or "native compile failed").strip()
+        executable.chmod(0o755)
+        return True, f"native launcher compiled for {entrypoint}"
+
+    native_ok, native_message = write_native_launcher()
+    if not native_ok:
+        write_shell_launcher(native_message)
 
     plist = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -2542,9 +2706,9 @@ exec {shlex.quote(str(command_path))} "$@"
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.5</string>
+  <string>0.3.6</string>
   <key>CFBundleVersion</key>
-  <string>0.3.5</string>
+  <string>0.3.6</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>
@@ -2559,6 +2723,7 @@ exec {shlex.quote(str(command_path))} "$@"
 
     print(f"Installed launcher: {app_dir}")
     print(f"Target command: {command_path}")
+    print(f"Launcher mode: {native_message}")
     print(f"Open it with: open {shlex.quote(str(app_dir))}")
     return 0
 
