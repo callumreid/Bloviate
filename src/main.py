@@ -667,6 +667,9 @@ class Bloviate:
         self._worker_threads = set()
         self._worker_threads_lock = threading.Lock()
         self._enrollment_lock = threading.Lock()
+        self._audio_start_lock = threading.Lock()
+        self._audio_start_in_progress = False
+        self._audio_start_error = None
         self._interim_update_interval_s = float(
             self.config.get("ui", {}).get("interim_update_interval_s", 0.15)
         )
@@ -687,6 +690,8 @@ class Bloviate:
         """Switch audio input device and persist the selection."""
         if self.is_recording or self.is_command_recording:
             return False, "Finish the current recording before switching input devices."
+        if self._audio_start_in_progress:
+            return False, "Wait for microphone startup to finish before switching input devices."
 
         selected = str(device_name or "").strip()
         previous = str(self.config.get("audio", {}).get("device_name", "") or "").strip()
@@ -770,6 +775,9 @@ class Bloviate:
             return False, "Voice fingerprinting is unavailable."
         if self._shutdown_event.is_set():
             return False, "App is shutting down."
+        if getattr(self.audio_capture, "stream", None) is None:
+            self._start_audio_capture_async("enrollment")
+            return False, "Microphone is still starting. Try again in a moment."
         if not self._enrollment_lock.acquire(blocking=False):
             return False, "Enrollment capture already in progress."
 
@@ -1168,12 +1176,18 @@ class Bloviate:
                 }
             }
 
-        microphone_state = "granted" if getattr(self.audio_capture, "stream", None) is not None else "unknown"
-        microphone_detail = (
-            "Audio stream is running."
-            if microphone_state == "granted"
-            else "Click Request Microphone to trigger the macOS microphone prompt."
-        )
+        if getattr(self.audio_capture, "stream", None) is not None:
+            microphone_state = "granted"
+            microphone_detail = "Audio stream is running."
+        elif self._audio_start_in_progress:
+            microphone_state = "unknown"
+            microphone_detail = "Audio input is starting."
+        elif self._audio_start_error:
+            microphone_state = "missing"
+            microphone_detail = f"Audio input could not start: {self._audio_start_error}"
+        else:
+            microphone_state = "unknown"
+            microphone_detail = "Click Request Microphone to trigger the macOS microphone prompt."
         accessibility_granted = _macos_accessibility_trusted()
         auto_paste = bool(self.config.get("transcription", {}).get("auto_paste", True))
 
@@ -1207,12 +1221,10 @@ class Bloviate:
             return True, "No macOS permissions are required on this platform."
 
         if normalized == "microphone":
-            try:
-                self.audio_capture.start()
-                return True, "Microphone permission is ready; audio capture started."
-            except Exception as exc:
-                _open_macos_privacy_pane("microphone")
-                return False, f"Microphone access is not ready: {exc}"
+            if getattr(self.audio_capture, "stream", None) is not None:
+                return True, "Microphone permission is ready; audio capture is running."
+            self._start_audio_capture_async("permissions")
+            return True, "Starting microphone check. macOS may show a permission prompt."
 
         if normalized == "accessibility":
             if accessibility_trusted():
@@ -1339,6 +1351,40 @@ class Bloviate:
         thread.start()
         return thread
 
+    def _start_audio_capture_async(self, reason: str = "startup") -> bool:
+        """Start microphone capture without blocking the UI thread."""
+        if self._shutdown_event.is_set():
+            return False
+        if getattr(self.audio_capture, "stream", None) is not None:
+            return True
+
+        with self._audio_start_lock:
+            if self._audio_start_in_progress:
+                return False
+            self._audio_start_in_progress = True
+            self._audio_start_error = None
+
+        if self.ui_window:
+            self.ui_window.signals.update_status.emit("Starting microphone...")
+        self._start_worker(self._start_audio_capture_worker, reason)
+        return False
+
+    def _start_audio_capture_worker(self, reason: str):
+        try:
+            self.audio_capture.start()
+            self._audio_start_error = None
+            print(f"[Audio] Capture ready ({reason})")
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit("Ready")
+        except Exception as exc:
+            self._audio_start_error = str(exc)
+            print(f"[Permissions] Audio capture could not start yet: {exc}")
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit("Microphone permission needed")
+        finally:
+            with self._audio_start_lock:
+                self._audio_start_in_progress = False
+
     def _join_workers(self, timeout: float = 3.0):
         """Wait briefly for background workers to finish."""
         deadline = time.time() + timeout
@@ -1463,6 +1509,12 @@ class Bloviate:
             print("[PTT] Ignored: previous clip is still processing")
             if self.ui_window:
                 self.ui_window.signals.update_status.emit("Still processing previous clip...")
+            return
+        if getattr(self.audio_capture, "stream", None) is None:
+            self._start_audio_capture_async("dictation")
+            print("[PTT] Ignored: audio input is still starting")
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit("Starting microphone...")
             return
         print("\n[PTT] Activated")
 
@@ -2407,12 +2459,7 @@ class Bloviate:
         self.backfill_achievements()
 
         self.audio_capture.register_callback(self.audio_callback)
-        try:
-            self.audio_capture.start()
-        except Exception as exc:
-            print(f"[Permissions] Audio capture could not start yet: {exc}")
-            if self.ui_window:
-                self.ui_window.signals.update_status.emit("Microphone permission needed")
+        self._start_audio_capture_async("startup")
 
         # Start PTT handler
         self._setup_toggle_hotkey()
@@ -2706,9 +2753,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.7</string>
+  <string>0.3.8</string>
   <key>CFBundleVersion</key>
-  <string>0.3.7</string>
+  <string>0.3.8</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>
