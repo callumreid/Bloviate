@@ -87,6 +87,7 @@ from personal_dictionary import (
     resolve_personal_dictionary_path,
     save_personal_dictionary,
 )
+from achievement_service import AchievementService
 from history_store import HistoryStore
 from macos_permissions import (
     accessibility_trusted,
@@ -606,6 +607,10 @@ class Bloviate:
         self.secret_store = SecretStore()
         self.model_registry = ModelRegistry()
         self.history_store = HistoryStore()
+        self.achievement_service = AchievementService(
+            self.config,
+            secret_store=self.secret_store,
+        )
         self.post_processor = PostProcessor(self.config, secret_store=self.secret_store)
         self.verbose_logs = _is_verbose_logging_enabled(self.config)
         self._quiet_startup = not self.verbose_logs
@@ -789,6 +794,7 @@ class Bloviate:
             self.voice_fingerprint.save_profile()
             enrolled = len(self.voice_fingerprint.enrolled_embeddings)
             minimum = int(self.voice_fingerprint.min_enrollment_samples)
+            self._evaluate_achievements()
             if self.voice_fingerprint.is_enrolled():
                 return True, f"Captured sample {enrolled}/{minimum} (RMS={rms:.4f}). Profile is ready."
             return True, f"Captured sample {enrolled}/{minimum} (RMS={rms:.4f})."
@@ -855,6 +861,7 @@ class Bloviate:
         try:
             path = save_personal_dictionary(self.config, preferred_terms, corrections)
             self.transcriber.reload_personal_dictionary()
+            self._evaluate_achievements()
             return True, f"Saved dictionary: {path}"
         except Exception as exc:
             return False, f"Could not save dictionary: {exc}"
@@ -1042,6 +1049,102 @@ class Bloviate:
             return True, f"Exported history to {exported}"
         except Exception as exc:
             return False, f"Could not export history: {exc}"
+
+    def _achievement_context(self) -> tuple[dict, dict]:
+        try:
+            dictionary_payload = load_personal_dictionary(self.config)
+        except Exception:
+            dictionary_payload = {}
+        try:
+            voice_status = self.get_voice_profile_status()
+        except Exception:
+            voice_status = {}
+        return dictionary_payload, voice_status
+
+    def _evaluate_achievements(self, *, suppress_unlocks: bool = False, show: bool = True) -> list[dict]:
+        if not hasattr(self, "achievement_service"):
+            return []
+        try:
+            dictionary_payload, voice_status = self._achievement_context()
+            unlocks = self.achievement_service.evaluate(
+                dictionary_payload=dictionary_payload,
+                voice_profile_status=voice_status,
+                suppress_unlocks=suppress_unlocks,
+            )
+            if unlocks and show:
+                self._show_achievement_unlocks(unlocks)
+            return unlocks
+        except Exception as exc:
+            print(f"[Achievements] Evaluation failed: {exc}")
+            return []
+
+    def _show_achievement_unlocks(self, unlocks: list[dict]):
+        if not unlocks or not self.ui_window:
+            return
+        celebrations = str(self.config.get("achievements", {}).get("celebrations", "full") or "full")
+        if celebrations == "off":
+            return
+        if hasattr(self.ui_window.signals, "show_achievement_unlocks"):
+            self.ui_window.signals.show_achievement_unlocks.emit(unlocks)
+
+    def get_achievement_summary(self, query: str = "", status_filter: str = "all") -> dict:
+        """Return achievement progress for Settings."""
+        self._evaluate_achievements(show=False)
+        dictionary_payload, voice_status = self._achievement_context()
+        return self.achievement_service.summary(
+            dictionary_payload=dictionary_payload,
+            voice_profile_status=voice_status,
+            query=query,
+            status_filter=status_filter,
+        )
+
+    def reset_achievements(self) -> tuple[bool, str]:
+        ok, message = self.achievement_service.reset()
+        return ok, message
+
+    def set_achievement_settings(self, updates: dict) -> tuple[bool, str]:
+        try:
+            dotted_updates = {f"achievements.{key}": value for key, value in updates.items()}
+            self.settings_service.update_many(dotted_updates)
+            self.achievement_service.set_settings(updates)
+            return True, "Achievement settings saved."
+        except Exception as exc:
+            return False, f"Could not save achievement settings: {exc}"
+
+    def analyze_achievement_history(self) -> tuple[bool, str]:
+        dictionary_payload, voice_status = self._achievement_context()
+        ok, message, unlocks = self.achievement_service.analyze_history(
+            dictionary_payload=dictionary_payload,
+            voice_profile_status=voice_status,
+        )
+        if unlocks:
+            self._show_achievement_unlocks(unlocks)
+        return ok, message
+
+    def backfill_achievements(self):
+        dictionary_payload, voice_status = self._achievement_context()
+        try:
+            unlocks = self.achievement_service.backfill_if_needed(
+                dictionary_payload=dictionary_payload,
+                voice_profile_status=voice_status,
+            )
+        except Exception as exc:
+            print(f"[Achievements] Backfill failed: {exc}")
+            return
+        if not unlocks or not self.ui_window:
+            return
+        summary = dict(unlocks[0])
+        summary.update(
+            {
+                "id": "achievements_backfill_summary",
+                "title": "Achievement Shelf Stocked",
+                "description": f"{len(unlocks)} achievement(s) unlocked from your existing history.",
+                "progress_label": f"{len(unlocks)} unlocked",
+                "category": "Achievements",
+                "unlocked": True,
+            }
+        )
+        self._show_achievement_unlocks([summary])
 
     def run_doctor_text(self) -> tuple[bool, str]:
         """Run doctor and capture text for the Advanced settings tab."""
@@ -1759,12 +1862,12 @@ class Bloviate:
         voice_score: Optional[float] = None,
         duration_s: Optional[float] = None,
         output_action: str = "",
-    ):
+    ) -> Optional[int]:
         if not bool(self.config.get("history", {}).get("enabled", True)):
-            return
+            return None
         try:
             context = self._active_target_context()
-            self.history_store.add_transcript(
+            record_id = self.history_store.add_transcript(
                 text=text,
                 original_text=original_text or text,
                 mode=mode,
@@ -1777,8 +1880,11 @@ class Bloviate:
                 target_window=context.get("target_window", ""),
                 output_action=output_action,
             )
+            self._evaluate_achievements()
+            return record_id
         except Exception as exc:
             print(f"[History] Could not record transcript: {exc}")
+            return None
 
     def _transcribe_dictation_audio(self, audio_for_transcription: np.ndarray, stream_text: Optional[str]):
         """Return final dictation text/provider for accepted or rejected voice clips."""
@@ -2187,6 +2293,10 @@ class Bloviate:
             delete_history_record=self.delete_history_record,
             clear_history=self.clear_history,
             export_history=self.export_history,
+            get_achievement_summary=self.get_achievement_summary,
+            reset_achievements=self.reset_achievements,
+            set_achievement_settings=self.set_achievement_settings,
+            analyze_achievement_history=self.analyze_achievement_history,
             run_doctor_text=self.run_doctor_text,
             reset_settings_to_defaults=self.reset_settings_to_defaults,
             get_permission_statuses=self.get_permission_statuses,
@@ -2198,6 +2308,7 @@ class Bloviate:
         )
         if self.talk_mode and self.ui_window:
             self.ui_window.signals.update_voice_match.emit(True, -1.0)
+        self.backfill_achievements()
 
         self.audio_capture.register_callback(self.audio_callback)
         try:
@@ -2336,9 +2447,9 @@ exec {shlex.quote(str(command_path))} "$@"
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.2.0</string>
+  <string>0.3.0</string>
   <key>CFBundleVersion</key>
-  <string>0.2.0</string>
+  <string>0.3.0</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>

@@ -60,6 +60,8 @@ class ProductionServiceTests(unittest.TestCase):
             self.assertEqual(config["ui"]["theme"], "light")
             self.assertEqual(config["ptt"]["hotkey"], "<cmd>+<option>")
             self.assertTrue(config["history"]["enabled"])
+            self.assertTrue(config["achievements"]["enabled"])
+            self.assertFalse(config["achievements"]["ai_analysis_enabled"])
 
     def test_history_store_insert_search_delete_export(self):
         with tempfile.TemporaryDirectory() as tempdir:

@@ -88,6 +88,7 @@ Important files:
 - `config.yaml`
 - `personal_dictionary.yaml`
 - `history.sqlite`
+- `achievements/badges/`
 - `models/voice_profile.pkl`
 - `models/pretrained/...`
 - `logs/`

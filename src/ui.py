@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QHeaderView, QAbstractItemView, QFileDialog, QSizePolicy,
     QGridLayout
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker, QRectF
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker, QRectF, QSize
 from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter, QPen
 import sys
 import numpy as np
@@ -29,6 +29,7 @@ class UISignals(QObject):
     update_status = pyqtSignal(str)
     update_command_status = pyqtSignal(str, str)
     update_cleanup_mode = pyqtSignal(str, str)
+    show_achievement_unlocks = pyqtSignal(object)
 
 
 class MenuBarIndicator:
@@ -910,6 +911,109 @@ class InsightCard(QFrame):
             self.layout.addWidget(subtitle_label)
 
 
+class AchievementCelebrationOverlay(QFrame):
+    """Nonblocking full-window achievement unlock celebration."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.unlocks = []
+        self.index = 0
+        self.setObjectName("AchievementOverlay")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setVisible(False)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(36, 36, 36, 36)
+        outer.addStretch()
+
+        self.card = QFrame(self)
+        self.card.setObjectName("AchievementOverlayCard")
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(28, 28, 28, 24)
+        card_layout.setSpacing(14)
+
+        self.badge_label = QLabel()
+        self.badge_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.badge_label.setMinimumHeight(142)
+        card_layout.addWidget(self.badge_label)
+
+        self.title_label = QLabel("Achievement Unlocked")
+        self.title_label.setObjectName("AchievementOverlayTitle")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title_label.setWordWrap(True)
+        card_layout.addWidget(self.title_label)
+
+        self.description_label = QLabel("")
+        self.description_label.setObjectName("AchievementOverlayDescription")
+        self.description_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.description_label.setWordWrap(True)
+        card_layout.addWidget(self.description_label)
+
+        self.progress_label = QLabel("")
+        self.progress_label.setObjectName("AchievementOverlayProgress")
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(self.progress_label)
+
+        controls = QHBoxLayout()
+        self.previous_button = QPushButton("Previous")
+        self.next_button = QPushButton("Next")
+        self.dismiss_button = QPushButton("Dismiss")
+        self.dismiss_button.setObjectName("PrimaryActionButton")
+        controls.addStretch()
+        controls.addWidget(self.previous_button)
+        controls.addWidget(self.next_button)
+        controls.addWidget(self.dismiss_button)
+        controls.addStretch()
+        card_layout.addLayout(controls)
+
+        outer.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignCenter)
+        outer.addStretch()
+
+        self.previous_button.clicked.connect(self._previous)
+        self.next_button.clicked.connect(self._next)
+        self.dismiss_button.clicked.connect(self.hide)
+
+    def show_unlocks(self, unlocks):
+        self.unlocks = list(unlocks or [])
+        if not self.unlocks:
+            return
+        self.index = 0
+        self.setGeometry(self.parentWidget().rect())
+        self._render()
+        self.show()
+        self.raise_()
+
+    def _render(self):
+        item = self.unlocks[self.index]
+        badge_path = str(item.get("badge_path", "") or "")
+        pixmap = QPixmap(badge_path) if badge_path else QPixmap()
+        if not pixmap.isNull():
+            self.badge_label.setPixmap(
+                pixmap.scaled(132, 132, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            )
+        else:
+            self.badge_label.setText("Achievement")
+
+        prefix = "Achievement Unlocked"
+        if len(self.unlocks) > 1:
+            prefix = f"Achievement {self.index + 1} of {len(self.unlocks)}"
+        self.title_label.setText(f"{prefix}\n{item.get('title', 'Achievement')}")
+        self.description_label.setText(str(item.get("description", "")))
+        self.progress_label.setText(str(item.get("progress_label", "")))
+        self.previous_button.setEnabled(self.index > 0)
+        self.next_button.setEnabled(self.index < len(self.unlocks) - 1)
+
+    def _previous(self):
+        if self.index > 0:
+            self.index -= 1
+            self._render()
+
+    def _next(self):
+        if self.index < len(self.unlocks) - 1:
+            self.index += 1
+            self._render()
+
+
 class BloviateUI(QMainWindow):
     """Minimal UI showing real-time feedback."""
 
@@ -941,6 +1045,10 @@ class BloviateUI(QMainWindow):
         delete_history_record=None,
         clear_history=None,
         export_history=None,
+        get_achievement_summary=None,
+        reset_achievements=None,
+        set_achievement_settings=None,
+        analyze_achievement_history=None,
         run_doctor_text=None,
         reset_settings_to_defaults=None,
         get_permission_statuses=None,
@@ -977,6 +1085,10 @@ class BloviateUI(QMainWindow):
         self.delete_history_record = delete_history_record
         self.clear_history = clear_history
         self.export_history = export_history
+        self.get_achievement_summary = get_achievement_summary
+        self.reset_achievements = reset_achievements
+        self.set_achievement_settings = set_achievement_settings
+        self.analyze_achievement_history = analyze_achievement_history
         self.run_doctor_text = run_doctor_text
         self.reset_settings_to_defaults = reset_settings_to_defaults
         self.get_permission_statuses = get_permission_statuses
@@ -1008,6 +1120,7 @@ class BloviateUI(QMainWindow):
         self.signals.update_status.connect(self._update_status)
         self.signals.update_command_status.connect(self._update_command_status)
         self.signals.update_cleanup_mode.connect(self._update_cleanup_mode_from_runtime)
+        self.signals.show_achievement_unlocks.connect(self._show_achievement_unlocks)
 
         self._last_final_text = ""
         self._transcription_style_final = ""
@@ -1018,9 +1131,11 @@ class BloviateUI(QMainWindow):
         self._settings_error_style = "font-size: 12px; color: #B23B35; font-weight: 600;"
         self._dictionary_terms = []
         self._dictionary_corrections = []
+        self._achievement_rows = []
         self._permissions_prompt_shown = False
 
         self.init_ui()
+        self.achievement_overlay = AchievementCelebrationOverlay(self)
 
     def init_ui(self):
         """Initialize the UI components."""
@@ -1274,6 +1389,83 @@ class BloviateUI(QMainWindow):
         insights_layout.addLayout(insights_grid)
         layout.addWidget(insights_group)
         self.refresh_insights_button.clicked.connect(self._refresh_insights)
+
+        # Achievements
+        achievements_group = QGroupBox("Achievements")
+        achievements_layout = QVBoxLayout(achievements_group)
+        achievements_layout.setSpacing(12)
+
+        achievements_header = QHBoxLayout()
+        self.achievement_summary_label = QLabel("0 / 528 unlocked")
+        self.achievement_summary_label.setObjectName("InsightSectionTitle")
+        self.achievement_status_label = QLabel("")
+        self.achievement_status_label.setStyleSheet(self._settings_status_default_style)
+        achievements_header.addWidget(self.achievement_summary_label)
+        achievements_header.addStretch()
+        achievements_header.addWidget(self.achievement_status_label)
+        achievements_layout.addLayout(achievements_header)
+
+        self.achievement_progress_bar = QProgressBar()
+        self.achievement_progress_bar.setRange(0, 100)
+        self.achievement_progress_bar.setFormat("0%")
+        achievements_layout.addWidget(self.achievement_progress_bar)
+
+        achievement_filters = QHBoxLayout()
+        self.achievement_search_edit = QLineEdit()
+        self.achievement_search_edit.setPlaceholderText("Search achievements")
+        self.achievement_filter_combo = QComboBox()
+        self.achievement_filter_combo.addItem("All", "all")
+        self.achievement_filter_combo.addItem("Unlocked", "unlocked")
+        self.achievement_filter_combo.addItem("Locked", "locked")
+        self.achievement_filter_combo.addItem("AI-assisted", "ai")
+        self.refresh_achievements_button = QPushButton("Refresh")
+        achievement_filters.addWidget(self.achievement_search_edit, 1)
+        achievement_filters.addWidget(self.achievement_filter_combo)
+        achievement_filters.addWidget(self.refresh_achievements_button)
+        achievements_layout.addLayout(achievement_filters)
+
+        achievement_actions = QHBoxLayout()
+        self.achievement_ai_checkbox = QCheckBox("Enable AI-assisted achievements")
+        self.analyze_achievements_button = QPushButton("Analyze History")
+        self.reset_achievements_button = QPushButton("Reset Achievements")
+        achievement_actions.addWidget(self.achievement_ai_checkbox)
+        achievement_actions.addWidget(self.analyze_achievements_button)
+        achievement_actions.addWidget(self.reset_achievements_button)
+        achievement_actions.addStretch()
+        achievements_layout.addLayout(achievement_actions)
+
+        self.achievement_recent_label = QLabel("Recent unlocks will appear here.")
+        self.achievement_recent_label.setStyleSheet(self._settings_status_default_style)
+        self.achievement_recent_label.setWordWrap(True)
+        achievements_layout.addWidget(self.achievement_recent_label)
+
+        self.achievement_table = QTableWidget(0, 5)
+        self.achievement_table.setHorizontalHeaderLabels(["", "Achievement", "Category", "Progress", "Status"])
+        self.achievement_table.setIconSize(QSize(42, 42))
+        self.achievement_table.verticalHeader().setVisible(False)
+        self.achievement_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.achievement_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.achievement_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.achievement_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.achievement_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.achievement_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.achievement_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.achievement_table.setMinimumHeight(260)
+        achievements_layout.addWidget(self.achievement_table)
+
+        self.achievement_detail = QTextEdit()
+        self.achievement_detail.setReadOnly(True)
+        self.achievement_detail.setMinimumHeight(92)
+        achievements_layout.addWidget(self.achievement_detail)
+        layout.addWidget(achievements_group)
+
+        self.refresh_achievements_button.clicked.connect(self._refresh_achievements)
+        self.achievement_search_edit.textChanged.connect(self._refresh_achievements)
+        self.achievement_filter_combo.currentIndexChanged.connect(self._refresh_achievements)
+        self.achievement_ai_checkbox.stateChanged.connect(self._toggle_achievement_ai)
+        self.analyze_achievements_button.clicked.connect(self._analyze_achievements)
+        self.reset_achievements_button.clicked.connect(self._reset_achievements)
+        self.achievement_table.itemSelectionChanged.connect(self._show_selected_achievement_detail)
 
         # Audio settings
         audio_group = QGroupBox("Audio Input")
@@ -2532,6 +2724,135 @@ class BloviateUI(QMainWindow):
         self.insights_status_label.setText(f"{self._format_int(total_words)} words indexed")
         self.insights_status_label.setStyleSheet(self._settings_status_default_style)
 
+    def _refresh_achievements(self):
+        if not hasattr(self, "achievement_table"):
+            return
+        self.achievement_table.setRowCount(0)
+        if not self.get_achievement_summary:
+            self._set_settings_status(self.achievement_status_label, "Achievements unavailable.", ok=False)
+            return
+
+        query = self.achievement_search_edit.text().strip()
+        status_filter = str(self.achievement_filter_combo.currentData() or "all")
+        try:
+            summary = self.get_achievement_summary(query, status_filter) or {}
+        except Exception as exc:
+            self._set_settings_status(self.achievement_status_label, f"Could not load achievements: {exc}", ok=False)
+            return
+
+        total = int(summary.get("total", 0) or 0)
+        unlocked = int(summary.get("unlocked", 0) or 0)
+        percent = int(round((unlocked / max(1, total)) * 100))
+        self.achievement_summary_label.setText(f"{self._format_int(unlocked)} / {self._format_int(total)} unlocked")
+        self.achievement_progress_bar.setValue(percent)
+        self.achievement_progress_bar.setFormat(f"{percent}%")
+
+        with QSignalBlocker(self.achievement_ai_checkbox):
+            self.achievement_ai_checkbox.setChecked(bool(summary.get("ai_analysis_enabled", False)))
+
+        recent = summary.get("recent", []) or []
+        if recent:
+            labels = [str(item.get("title", "Achievement")) for item in recent[:4]]
+            self.achievement_recent_label.setText("Recent: " + " | ".join(labels))
+        else:
+            self.achievement_recent_label.setText("Recent unlocks will appear here.")
+
+        achievements = list(summary.get("achievements", []) or [])
+        self._achievement_rows = achievements
+        self.achievement_table.setRowCount(len(achievements))
+        for row_idx, item in enumerate(achievements):
+            icon_item = QTableWidgetItem()
+            badge_path = str(item.get("badge_path", "") or "")
+            if badge_path:
+                icon_item.setIcon(QIcon(badge_path))
+            icon_item.setData(Qt.ItemDataRole.UserRole, item)
+            self.achievement_table.setItem(row_idx, 0, icon_item)
+
+            title = str(item.get("title", "Achievement"))
+            if item.get("ai_required"):
+                title += " [AI]"
+            title_item = QTableWidgetItem(title)
+            title_item.setData(Qt.ItemDataRole.UserRole, item)
+            title_item.setToolTip(str(item.get("description", "")))
+            self.achievement_table.setItem(row_idx, 1, title_item)
+            self.achievement_table.setItem(row_idx, 2, QTableWidgetItem(str(item.get("category", ""))))
+            self.achievement_table.setItem(row_idx, 3, QTableWidgetItem(str(item.get("progress_label", ""))))
+            status = "Unlocked" if item.get("unlocked") else "Locked"
+            if item.get("hidden"):
+                status = "Secret"
+            self.achievement_table.setItem(row_idx, 4, QTableWidgetItem(status))
+            self.achievement_table.setRowHeight(row_idx, 54)
+
+        self._set_settings_status(
+            self.achievement_status_label,
+            f"Showing {len(achievements)} achievement(s).",
+            ok=True,
+        )
+        self._show_selected_achievement_detail()
+
+    def _toggle_achievement_ai(self, state: int):
+        enabled = state == Qt.CheckState.Checked.value
+        self.config.setdefault("achievements", {})["ai_analysis_enabled"] = enabled
+        if not self.set_achievement_settings:
+            self._set_settings_status(self.achievement_status_label, "Achievement settings are local-only this session.", ok=False)
+            return
+        ok, message = self.set_achievement_settings({"ai_analysis_enabled": enabled})
+        self._set_settings_status(self.achievement_status_label, message, ok=ok)
+
+    def _analyze_achievements(self):
+        if not self.analyze_achievement_history:
+            self._set_settings_status(self.achievement_status_label, "AI analysis unavailable.", ok=False)
+            return
+        self._set_settings_status(self.achievement_status_label, "Analyzing transcript history...", ok=True)
+        QApplication.processEvents()
+        ok, message = self.analyze_achievement_history()
+        self._set_settings_status(self.achievement_status_label, message, ok=ok)
+        self._refresh_achievements()
+
+    def _reset_achievements(self):
+        if not self.reset_achievements:
+            self._set_settings_status(self.achievement_status_label, "Achievement reset unavailable.", ok=False)
+            return
+        confirmed = QMessageBox.question(
+            self,
+            "Reset Achievements",
+            "Delete all local achievement unlocks, progress, and AI achievement tags?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+        ok, message = self.reset_achievements()
+        self._set_settings_status(self.achievement_status_label, message, ok=ok)
+        self._refresh_achievements()
+
+    def _show_selected_achievement_detail(self):
+        if not hasattr(self, "achievement_detail"):
+            return
+        rows = self.achievement_table.selectionModel().selectedRows() if self.achievement_table.selectionModel() else []
+        item = None
+        if rows:
+            item = self.achievement_table.item(rows[0].row(), 1)
+        if item is None and self._achievement_rows:
+            item_data = self._achievement_rows[0]
+        elif item is not None:
+            item_data = item.data(Qt.ItemDataRole.UserRole) or {}
+        else:
+            self.achievement_detail.setPlainText("No achievements match this filter.")
+            return
+        lines = [
+            str(item_data.get("title", "Achievement")),
+            str(item_data.get("description", "")),
+            "",
+            f"Category: {item_data.get('category', '')}",
+            f"Rarity: {item_data.get('rarity', '')}",
+            f"Progress: {item_data.get('progress_label', '')}",
+            f"Status: {'Unlocked' if item_data.get('unlocked') else 'Locked'}",
+        ]
+        if item_data.get("ai_required"):
+            lines.append("AI-assisted: requires opt-in transcript analysis.")
+        self.achievement_detail.setPlainText("\n".join(lines))
+
     def _refresh_history(self):
         if not hasattr(self, "history_table"):
             return
@@ -2722,6 +3043,7 @@ class BloviateUI(QMainWindow):
         self._refresh_dictionary_path()
         self._load_dictionary_editor()
         self._refresh_history()
+        self._refresh_achievements()
 
     def show_status_tab(self):
         """Bring the status tab into focus."""
@@ -2971,6 +3293,31 @@ class BloviateUI(QMainWindow):
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0;
             }
+            QFrame#AchievementOverlay {
+                background-color: rgba(38, 33, 29, 160);
+            }
+            QFrame#AchievementOverlayCard {
+                background: #FFFDF7;
+                border: 1px solid #D8CCBA;
+                border-radius: 16px;
+                min-width: 440px;
+                max-width: 560px;
+            }
+            QLabel#AchievementOverlayTitle {
+                color: #26211D;
+                font-size: 24px;
+                font-weight: 800;
+            }
+            QLabel#AchievementOverlayDescription {
+                color: #514941;
+                font-size: 14px;
+                font-weight: 600;
+            }
+            QLabel#AchievementOverlayProgress {
+                color: #2D6B6B;
+                font-size: 13px;
+                font-weight: 800;
+            }
             """
         )
 
@@ -3138,6 +3485,13 @@ class BloviateUI(QMainWindow):
         if self.ptt_overlay:
             self.ptt_overlay.set_rejected()
 
+    def _show_achievement_unlocks(self, unlocks):
+        """Show batched achievement unlocks and refresh the Settings grid."""
+        if hasattr(self, "achievement_overlay"):
+            self.achievement_overlay.show_unlocks(unlocks)
+        if hasattr(self, "achievement_table"):
+            QTimer.singleShot(0, self._refresh_achievements)
+
     def _update_interim_transcription(self, text: str):
         """Update interim transcription display while recording."""
         if not text or not text.strip():
@@ -3166,6 +3520,11 @@ class BloviateUI(QMainWindow):
         if self.ptt_overlay:
             self.ptt_overlay.close()
         super().closeEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "achievement_overlay") and self.achievement_overlay.isVisible():
+            self.achievement_overlay.setGeometry(self.rect())
 
 
 class StartupSplash(QWidget):
@@ -3398,6 +3757,10 @@ def create_ui(
     delete_history_record=None,
     clear_history=None,
     export_history=None,
+    get_achievement_summary=None,
+    reset_achievements=None,
+    set_achievement_settings=None,
+    analyze_achievement_history=None,
     run_doctor_text=None,
     reset_settings_to_defaults=None,
     get_permission_statuses=None,
@@ -3442,6 +3805,10 @@ def create_ui(
         delete_history_record=delete_history_record,
         clear_history=clear_history,
         export_history=export_history,
+        get_achievement_summary=get_achievement_summary,
+        reset_achievements=reset_achievements,
+        set_achievement_settings=set_achievement_settings,
+        analyze_achievement_history=analyze_achievement_history,
         run_doctor_text=run_doctor_text,
         reset_settings_to_defaults=reset_settings_to_defaults,
         get_permission_statuses=get_permission_statuses,

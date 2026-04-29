@@ -195,6 +195,24 @@ def _migrate_config(data: dict) -> dict:
         window_config["voice_command_prefixes"] = ["run command", "screen", "window", "desktop"]
     history_config = _config_section(data, "history")
     history_config["enabled"] = bool(history_config.get("enabled", True))
+    achievements_config = _config_section(data, "achievements")
+    achievements_config["enabled"] = bool(achievements_config.get("enabled", True))
+    achievements_config["celebrations"] = str(achievements_config.get("celebrations", "full") or "full")
+    achievements_config["ai_analysis_enabled"] = bool(
+        achievements_config.get("ai_analysis_enabled", False)
+    )
+    achievements_config["backfill_on_startup"] = bool(
+        achievements_config.get("backfill_on_startup", True)
+    )
+    if not achievements_config.get("ai_analysis_model"):
+        achievements_config["ai_analysis_model"] = "gpt-4o"
+    try:
+        achievements_config["ai_analysis_timeout_s"] = max(
+            3,
+            int(achievements_config.get("ai_analysis_timeout_s", 12)),
+        )
+    except (TypeError, ValueError):
+        achievements_config["ai_analysis_timeout_s"] = 12
     transcription_config = _config_section(data, "transcription")
     if is_legacy_config and not bool(transcription_config.get("auto_paste", False)):
         transcription_config["auto_paste"] = True

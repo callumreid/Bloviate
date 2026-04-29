@@ -81,6 +81,15 @@ history:
   enabled: true  # Text-only local history; raw audio is never stored by default
   max_ui_records: 100
 
+# Local achievements
+achievements:
+  enabled: true
+  celebrations: "full"  # full, subtle, off
+  ai_analysis_enabled: false  # Sends transcript text to OpenAI only when explicitly enabled
+  ai_analysis_model: "gpt-4o"
+  ai_analysis_timeout_s: 12
+  backfill_on_startup: true
+
 # Post-processing / cleanup
 post_processing:
   mode: "verbatim"  # verbatim, clean, coding, message

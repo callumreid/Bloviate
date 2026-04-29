@@ -16,6 +16,7 @@ Bloviate is a macOS-first voice dictation app for whispering in noisy spaces. It
 - Uses Deepgram for live interim text, OpenAI or Deepgram for final text, and local Whisper as fallback
 - Lets you configure audio input, hotkeys, models, providers, API keys, dictionary, cleanup, history, startup behavior, and diagnostics from Settings
 - Shows local usage insights in Settings: words dictated, speaking pace, cleanup fixes, app breakdown, and streak heatmap
+- Tracks 500+ local achievements with generated badge art, progress search, and opt-in AI-assisted content achievements
 - Stores user config/state under `~/Library/Application Support/Bloviate`
 - Keeps transcript history locally in SQLite; raw audio is not stored by default
 
@@ -178,6 +179,18 @@ Transcript history is enabled by default and stored locally at:
 ```
 
 History stores text metadata such as timestamp, mode, provider, target app/window, voice score, and output action. It does not store raw audio by default. Whisper-mode voice rejections are still transcribed into history when possible, but they are not auto-pasted. You can search, copy, delete, clear, export, or disable history in Settings.
+
+## Achievements
+
+Bloviate includes a local achievement shelf with 528 usage-based achievements across dictation volume, apps used, speaking speed, streaks, dictionary entries, cleanup fixes, voice/profile usage, vocabulary shape, and rare combinations. Achievements are stored in the same local SQLite database as history, while generated badge PNGs are cached under:
+
+```bash
+~/Library/Application Support/Bloviate/achievements/badges
+```
+
+Badge art is generated locally from deterministic achievement metadata; Bloviate does not ship hundreds of static image files. Achievements can be reset separately from transcript history. If you reset achievements, existing history before the reset is ignored for future achievement unlocks.
+
+AI-assisted achievements are off by default. If you enable them in Settings and have an OpenAI key configured, Bloviate sends transcript text to OpenAI for compact achievement tags such as message, todo, meeting, bug report, documentation, action items, or summary. It stores only those tags locally, not raw AI prompts or responses.
 
 ## Permissions
 

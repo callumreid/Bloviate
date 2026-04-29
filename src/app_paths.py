@@ -52,6 +52,14 @@ def history_db_path() -> Path:
     return app_support_dir() / "history.sqlite"
 
 
+def achievements_dir() -> Path:
+    return app_support_dir() / "achievements"
+
+
+def achievement_badges_dir() -> Path:
+    return achievements_dir() / "badges"
+
+
 def models_dir() -> Path:
     return app_support_dir() / "models"
 
@@ -139,6 +147,7 @@ def describe_paths() -> Dict[str, Path]:
         "home": app_support_dir(),
         "config": config_path(),
         "history": history_db_path(),
+        "achievements": achievements_dir(),
         "logs": logs_dir(),
         "models": models_dir(),
         "personal_dictionary": personal_dictionary_path(),
