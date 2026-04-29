@@ -1330,14 +1330,19 @@ class BloviateUI(QMainWindow):
         nav_layout.addStretch()
         layout.addWidget(nav)
 
+        self._nav_syncing = False
         self.tabs = QStackedWidget()
         layout.addWidget(self.tabs)
         self.status_tab = QWidget()
         self.settings_tab = QWidget()
         self.tabs.addWidget(self.status_tab)
         self.tabs.addWidget(self.settings_tab)
-        self.status_nav_button.clicked.connect(lambda _checked=False: self.show_status_tab())
-        self.settings_nav_button.clicked.connect(lambda _checked=False: self.show_settings_tab())
+        self.status_nav_button.toggled.connect(
+            lambda checked: self.show_status_tab() if checked and not self._nav_syncing else None
+        )
+        self.settings_nav_button.toggled.connect(
+            lambda checked: self.show_settings_tab() if checked and not self._nav_syncing else None
+        )
         self._build_status_tab()
         self._build_settings_tab()
         self._select_main_page(self.status_tab)
@@ -3546,10 +3551,14 @@ class BloviateUI(QMainWindow):
     def _select_main_page(self, page: QWidget):
         if hasattr(self, "tabs"):
             self.tabs.setCurrentWidget(page)
-        if hasattr(self, "status_nav_button"):
-            self.status_nav_button.setChecked(page is self.status_tab)
-        if hasattr(self, "settings_nav_button"):
-            self.settings_nav_button.setChecked(page is self.settings_tab)
+        self._nav_syncing = True
+        try:
+            if hasattr(self, "status_nav_button"):
+                self.status_nav_button.setChecked(page is self.status_tab)
+            if hasattr(self, "settings_nav_button"):
+                self.settings_nav_button.setChecked(page is self.settings_tab)
+        finally:
+            self._nav_syncing = False
 
     def request_quit(self):
         """Mark the window as closing and quit the app."""
