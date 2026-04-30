@@ -83,6 +83,7 @@ transcription:
 history:
   enabled: true  # Text-only local history; raw audio is never stored by default
   max_ui_records: 100
+  settings_table_limit: 50
 
 # Local achievements
 achievements:
@@ -92,6 +93,7 @@ achievements:
   ai_analysis_model: "gpt-4o"
   ai_analysis_timeout_s: 12
   backfill_on_startup: true
+  settings_table_limit: 40
 
 # Post-processing / cleanup
 post_processing:

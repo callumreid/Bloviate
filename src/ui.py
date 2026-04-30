@@ -1274,12 +1274,23 @@ class BloviateUI(QMainWindow):
         self._dictionary_corrections = []
         self._achievement_rows = []
         self._achievement_table_limit = max(
-            50,
-            int(config.get("achievements", {}).get("settings_table_limit", 150) or 150),
+            20,
+            int(config.get("achievements", {}).get("settings_table_limit", 40) or 40),
         )
+        history_cfg = config.get("history", {})
+        self._history_table_limit = max(
+            20,
+            int(history_cfg.get("settings_table_limit", min(int(history_cfg.get("max_ui_records", 100) or 100), 50)) or 50),
+        )
+        self._settings_populated = False
+        self._history_dirty = True
+        self._achievements_dirty = True
         self._achievement_refresh_timer = QTimer(self)
         self._achievement_refresh_timer.setSingleShot(True)
         self._achievement_refresh_timer.timeout.connect(self._refresh_achievements)
+        self._history_refresh_timer = QTimer(self)
+        self._history_refresh_timer.setSingleShot(True)
+        self._history_refresh_timer.timeout.connect(self._refresh_history)
         self._permissions_prompt_shown = False
 
         self.init_ui()
@@ -2079,12 +2090,12 @@ class BloviateUI(QMainWindow):
         layout.addWidget(history_group)
         self.refresh_history_button.clicked.connect(self._refresh_history)
         self.history_search_edit.returnPressed.connect(self._refresh_history)
-        self.history_search_edit.textChanged.connect(self._refresh_history)
+        self.history_search_edit.textChanged.connect(self._queue_history_refresh)
         self.copy_history_button.clicked.connect(self._copy_history_selection)
         self.delete_history_button.clicked.connect(self._delete_history_selection)
         self.clear_history_button.clicked.connect(self._clear_history)
         self.export_history_button.clicked.connect(self._export_history)
-        self._refresh_history()
+        self.history_status_label.setText("History loads when Settings is opened.")
 
         # Startup preferences
         startup_group = QGroupBox("Startup")
@@ -3204,6 +3215,25 @@ class BloviateUI(QMainWindow):
         else:
             self._refresh_achievements()
 
+    def _queue_history_refresh(self):
+        if hasattr(self, "_history_refresh_timer"):
+            self._history_refresh_timer.start(180)
+        else:
+            self._refresh_history()
+
+    def _settings_visible(self) -> bool:
+        return bool(hasattr(self, "tabs") and self.tabs.currentWidget() is self.settings_tab)
+
+    def _mark_history_dirty(self):
+        self._history_dirty = True
+        if self._settings_visible() and hasattr(self, "history_table"):
+            self._queue_history_refresh()
+
+    def _mark_achievements_dirty(self):
+        self._achievements_dirty = True
+        if self._settings_visible() and hasattr(self, "achievement_table"):
+            self._queue_achievement_refresh()
+
     def _refresh_achievements(self):
         if not hasattr(self, "achievement_table"):
             return
@@ -3279,6 +3309,7 @@ class BloviateUI(QMainWindow):
             ),
             ok=True,
         )
+        self._achievements_dirty = False
         self._show_selected_achievement_detail()
 
     def _toggle_achievement_ai(self, state: int):
@@ -3353,7 +3384,8 @@ class BloviateUI(QMainWindow):
             return
         query = self.history_search_edit.text().strip()
         try:
-            max_records = int(self.config.get("history", {}).get("max_ui_records", 100))
+            configured_limit = int(self.config.get("history", {}).get("max_ui_records", 100))
+            max_records = min(configured_limit, self._history_table_limit)
             records = self.get_history_records(query, max_records) or []
         except Exception as exc:
             self._set_settings_status(self.history_status_label, f"Could not load history: {exc}", ok=False)
@@ -3371,14 +3403,12 @@ class BloviateUI(QMainWindow):
                 record.get("text", ""),
             ]
             for col_idx, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
+                full_value = str(value)
+                display_value = self._truncate_table_text(full_value) if col_idx == 4 else full_value
+                item = QTableWidgetItem(display_value)
                 item.setData(Qt.ItemDataRole.UserRole, record.get("id"))
                 if col_idx == 4:
-                    item.setToolTip(
-                        "Original: " + str(record.get("original_text", ""))
-                        if record.get("original_text") != record.get("text")
-                        else str(record.get("text", ""))
-                    )
+                    item.setData(Qt.ItemDataRole.UserRole + 1, full_value)
                 self.history_table.setItem(row_idx, col_idx, item)
         if records:
             self._set_settings_status(self.history_status_label, f"Loaded {len(records)} history item(s).", ok=True)
@@ -3388,7 +3418,14 @@ class BloviateUI(QMainWindow):
                 "No saved transcripts yet. New dictations are recorded automatically.",
                 ok=True,
             )
+        self._history_dirty = False
         self._refresh_insights()
+
+    def _truncate_table_text(self, text: str, max_chars: int = 160) -> str:
+        value = " ".join(str(text or "").split())
+        if len(value) <= max_chars:
+            return value
+        return value[: max(0, max_chars - 3)].rstrip() + "..."
 
     def _selected_history_id(self):
         rows = self.history_table.selectionModel().selectedRows() if self.history_table.selectionModel() else []
@@ -3404,7 +3441,7 @@ class BloviateUI(QMainWindow):
             return
         text_item = self.history_table.item(rows[0].row(), 4)
         if text_item:
-            QApplication.clipboard().setText(text_item.text())
+            QApplication.clipboard().setText(text_item.data(Qt.ItemDataRole.UserRole + 1) or text_item.text())
             self._set_settings_status(self.history_status_label, "Copied history text.", ok=True)
 
     def _delete_history_selection(self):
@@ -3537,9 +3574,12 @@ class BloviateUI(QMainWindow):
             return
         self._refresh_voice_controls()
         self._refresh_dictionary_path()
-        self._load_dictionary_editor()
-        self._refresh_history()
-        self._queue_achievement_refresh()
+        QTimer.singleShot(0, self._load_dictionary_editor)
+        if self._history_dirty or not self._settings_populated:
+            QTimer.singleShot(50, self._refresh_history)
+        if self._achievements_dirty or not self._settings_populated:
+            QTimer.singleShot(100, self._queue_achievement_refresh)
+        self._settings_populated = True
 
     def show_status_tab(self):
         """Bring the status tab into focus."""
@@ -4026,8 +4066,7 @@ class BloviateUI(QMainWindow):
         self.transcription_label.setText(f"Last: {text}")
         self.transcription_label.setStyleSheet(self._transcription_style_final)
         self._last_final_text = text
-        if hasattr(self, "history_table"):
-            QTimer.singleShot(0, self._refresh_history)
+        self._mark_history_dirty()
         # Show success in menu bar
         if self.menu_bar_indicator:
             self.menu_bar_indicator.set_accepted()
@@ -4042,8 +4081,7 @@ class BloviateUI(QMainWindow):
             "border: 1px solid #E3C88A; border-radius: 8px; min-height: 52px;"
         )
         self._last_final_text = f"Rejected (history only): {text}"
-        if hasattr(self, "history_table"):
-            QTimer.singleShot(0, self._refresh_history)
+        self._mark_history_dirty()
         if self.menu_bar_indicator:
             self.menu_bar_indicator.set_rejected()
         if self.ptt_overlay:
@@ -4060,8 +4098,7 @@ class BloviateUI(QMainWindow):
         ):
             self.ptt_overlay.show_message(self._milestone_toast(unlocks), state="mode", hold_ms=2400)
             self._increment_easter_counter("milestone_toasts_shown")
-        if hasattr(self, "achievement_table"):
-            QTimer.singleShot(0, self._refresh_achievements)
+        self._mark_achievements_dirty()
 
     def _milestone_toast(self, unlocks) -> str:
         titles = [str(item.get("title", "")) for item in list(unlocks or []) if isinstance(item, dict)]
