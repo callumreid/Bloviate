@@ -40,7 +40,7 @@ class AchievementUISmokeTests(unittest.TestCase):
             "post_processing": {},
         }
 
-        def achievement_summary(query="", status_filter="all"):
+        def achievement_summary(query="", status_filter="all", limit=None):
             return {
                 "enabled": True,
                 "ai_analysis_enabled": False,

@@ -105,6 +105,7 @@ class AchievementService:
         voice_profile_status: Optional[dict] = None,
         query: str = "",
         status_filter: str = "all",
+        limit: Optional[int] = None,
     ) -> dict:
         metrics = self.metric_values(
             dictionary_payload=dictionary_payload,
@@ -114,35 +115,47 @@ class AchievementService:
         query = str(query or "").strip().lower()
         status_filter = str(status_filter or "all").strip().lower()
 
-        achievements = []
+        matching = []
         for definition in self.catalog:
             unlock = unlocks.get(definition.id)
-            item = self._achievement_dict(definition, metrics, unlock=unlock)
             if query and query not in " ".join(
                 [
-                    item["title"],
-                    item["description"],
-                    item["category"],
-                    item["id"],
+                    definition.title,
+                    definition.description,
+                    definition.category,
+                    definition.id,
                 ]
             ).lower():
                 continue
-            if status_filter == "unlocked" and not item["unlocked"]:
+            if status_filter == "unlocked" and not unlock:
                 continue
-            if status_filter == "locked" and item["unlocked"]:
+            if status_filter == "locked" and unlock:
                 continue
-            if status_filter == "ai" and not item["ai_required"]:
+            if status_filter == "ai" and not definition.ai_required:
                 continue
-            achievements.append(item)
+            value = float(metrics.get(definition.metric, 0) or 0)
+            progress_ratio = min(1.0, value / definition.threshold) if definition.threshold > 0 else 0.0
+            matching.append((definition, unlock, progress_ratio))
 
-        achievements.sort(
+        matching.sort(
             key=lambda item: (
-                not item["unlocked"],
-                -float(item.get("progress_ratio", 0)),
-                item["category"],
-                item["title"],
+                not item[1],
+                -float(item[2]),
+                item[0].category,
+                item[0].title,
             )
         )
+        matching_count = len(matching)
+        if limit is not None:
+            try:
+                limit_value = max(1, int(limit))
+                matching = matching[:limit_value]
+            except (TypeError, ValueError):
+                pass
+        achievements = [
+            self._achievement_dict(definition, metrics, unlock=unlock)
+            for definition, unlock, _progress_ratio in matching
+        ]
         recent = []
         for unlock in self.store.recent_unlocks(limit=8):
             definition = self.definitions_by_id.get(unlock.id)
@@ -157,6 +170,7 @@ class AchievementService:
             "total": len(self.catalog),
             "unlocked": len(unlocks),
             "locked": max(0, len(self.catalog) - len(unlocks)),
+            "matching": matching_count,
             "achievements": achievements,
             "recent": recent,
         }

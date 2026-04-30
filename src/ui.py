@@ -1274,13 +1274,29 @@ class BloviateUI(QMainWindow):
         self._dictionary_corrections = []
         self._achievement_rows = []
         self._achievement_table_limit = max(
-            20,
-            int(config.get("achievements", {}).get("settings_table_limit", 40) or 40),
+            10,
+            min(24, int(config.get("achievements", {}).get("settings_table_limit", 20) or 20)),
         )
         history_cfg = config.get("history", {})
         self._history_table_limit = max(
-            20,
-            int(history_cfg.get("settings_table_limit", min(int(history_cfg.get("max_ui_records", 100) or 100), 50)) or 50),
+            10,
+            min(
+                24,
+                int(
+                    history_cfg.get(
+                        "settings_table_limit",
+                        min(int(history_cfg.get("max_ui_records", 100) or 100), 20),
+                    )
+                    or 20
+                ),
+            ),
+        )
+        self._dictionary_table_limit = max(
+            10,
+            min(
+                30,
+                int(config.get("dictionary", {}).get("settings_table_limit", 24) or 24),
+            ),
         )
         self._settings_populated = False
         self._history_dirty = True
@@ -1992,6 +2008,10 @@ class BloviateUI(QMainWindow):
         self.dictionary_status_label.setStyleSheet(self._settings_status_default_style)
         dictionary_layout.addWidget(self.dictionary_status_label)
 
+        self.dictionary_search_edit = QLineEdit()
+        self.dictionary_search_edit.setPlaceholderText("Search dictionary entries")
+        dictionary_layout.addWidget(self.dictionary_search_edit)
+
         preferred_layout = QVBoxLayout()
         preferred_layout.addWidget(QLabel("Preferred words and phrases"))
         add_term_layout = QHBoxLayout()
@@ -2001,15 +2021,16 @@ class BloviateUI(QMainWindow):
         add_term_layout.addWidget(self.dictionary_term_edit, 1)
         add_term_layout.addWidget(self.add_dictionary_term_button)
         preferred_layout.addLayout(add_term_layout)
-        self.dictionary_terms_table = QTableWidget(0, 2)
-        self.dictionary_terms_table.setHorizontalHeaderLabels(["Word or phrase", ""])
+        self.dictionary_terms_table = QTableWidget(0, 1)
+        self.dictionary_terms_table.setHorizontalHeaderLabels(["Word or phrase"])
         self.dictionary_terms_table.verticalHeader().setVisible(False)
         self.dictionary_terms_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.dictionary_terms_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.dictionary_terms_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.dictionary_terms_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.dictionary_terms_table.setMinimumHeight(120)
         preferred_layout.addWidget(self.dictionary_terms_table)
+        self.delete_dictionary_term_button = QPushButton("Delete Selected Word")
+        preferred_layout.addWidget(self.delete_dictionary_term_button)
         dictionary_layout.addLayout(preferred_layout)
 
         correction_layout = QVBoxLayout()
@@ -2029,17 +2050,18 @@ class BloviateUI(QMainWindow):
         add_correction_layout.addWidget(self.dictionary_match_combo)
         add_correction_layout.addWidget(self.add_dictionary_correction_button)
         correction_layout.addLayout(add_correction_layout)
-        self.dictionary_corrections_table = QTableWidget(0, 4)
-        self.dictionary_corrections_table.setHorizontalHeaderLabels(["Replace", "With", "Match", ""])
+        self.dictionary_corrections_table = QTableWidget(0, 3)
+        self.dictionary_corrections_table.setHorizontalHeaderLabels(["Replace", "With", "Match"])
         self.dictionary_corrections_table.verticalHeader().setVisible(False)
         self.dictionary_corrections_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.dictionary_corrections_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.dictionary_corrections_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.dictionary_corrections_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.dictionary_corrections_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.dictionary_corrections_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.dictionary_corrections_table.setMinimumHeight(150)
         correction_layout.addWidget(self.dictionary_corrections_table)
+        self.delete_dictionary_correction_button = QPushButton("Delete Selected Replacement")
+        correction_layout.addWidget(self.delete_dictionary_correction_button)
         dictionary_layout.addLayout(correction_layout)
         layout.addWidget(dictionary_group)
 
@@ -2050,7 +2072,10 @@ class BloviateUI(QMainWindow):
         self.dictionary_term_edit.returnPressed.connect(self._add_dictionary_term)
         self.add_dictionary_correction_button.clicked.connect(self._add_dictionary_correction)
         self.dictionary_right_edit.returnPressed.connect(self._add_dictionary_correction)
-        self._load_dictionary_editor()
+        self.delete_dictionary_term_button.clicked.connect(self._delete_selected_dictionary_term)
+        self.delete_dictionary_correction_button.clicked.connect(self._delete_selected_dictionary_correction)
+        self.dictionary_search_edit.textChanged.connect(self._populate_dictionary_tables)
+        self.dictionary_status_label.setText("Dictionary loads when Settings is opened.")
 
         # History
         history_group = QGroupBox("History")
@@ -2996,7 +3021,7 @@ class BloviateUI(QMainWindow):
             self._populate_dictionary_tables()
             self._set_settings_status(
                 self.dictionary_status_label,
-                f"Loaded {len(self._dictionary_terms)} term(s), {len(self._dictionary_corrections)} replacement(s).",
+                self._dictionary_status_text(),
                 ok=True,
             )
         except Exception as exc:
@@ -3016,15 +3041,25 @@ class BloviateUI(QMainWindow):
             self._load_dictionary_editor()
 
     def _populate_dictionary_tables(self):
-        self.dictionary_terms_table.setRowCount(len(self._dictionary_terms))
-        for row_idx, term in enumerate(self._dictionary_terms):
-            self.dictionary_terms_table.setItem(row_idx, 0, QTableWidgetItem(str(term)))
-            delete_button = QPushButton("Delete")
-            delete_button.clicked.connect(lambda _checked=False, row=row_idx: self._delete_dictionary_term(row))
-            self.dictionary_terms_table.setCellWidget(row_idx, 1, delete_button)
+        query = ""
+        if hasattr(self, "dictionary_search_edit"):
+            query = self.dictionary_search_edit.text().strip().lower()
 
-        self.dictionary_corrections_table.setRowCount(len(self._dictionary_corrections))
-        for row_idx, correction in enumerate(self._dictionary_corrections):
+        term_rows = [
+            (source_idx, term)
+            for source_idx, term in enumerate(self._dictionary_terms)
+            if not query or query in str(term).lower()
+        ]
+        visible_terms = term_rows[: self._dictionary_table_limit]
+        self.dictionary_terms_table.setRowCount(0)
+        self.dictionary_terms_table.setRowCount(len(visible_terms))
+        for row_idx, (source_idx, term) in enumerate(visible_terms):
+            item = QTableWidgetItem(str(term))
+            item.setData(Qt.ItemDataRole.UserRole, source_idx)
+            self.dictionary_terms_table.setItem(row_idx, 0, item)
+
+        correction_rows = []
+        for source_idx, correction in enumerate(self._dictionary_corrections):
             variations = correction.get("variations", []) or []
             if not isinstance(variations, list):
                 variations = [variations]
@@ -3032,12 +3067,36 @@ class BloviateUI(QMainWindow):
             with_text = str(correction.get("phrase", ""))
             match = str(correction.get("match", "substring") or "substring")
             match_label = "Whole word" if match == "whole_word" else "Contains"
+            haystack = " ".join([replace_text, with_text, match_label]).lower()
+            if query and query not in haystack:
+                continue
+            correction_rows.append((source_idx, replace_text, with_text, match_label))
+
+        visible_corrections = correction_rows[: self._dictionary_table_limit]
+        self.dictionary_corrections_table.setRowCount(0)
+        self.dictionary_corrections_table.setRowCount(len(visible_corrections))
+        for row_idx, (source_idx, replace_text, with_text, match_label) in enumerate(visible_corrections):
             values = [replace_text, with_text, match_label]
             for col_idx, value in enumerate(values):
-                self.dictionary_corrections_table.setItem(row_idx, col_idx, QTableWidgetItem(value))
-            delete_button = QPushButton("Delete")
-            delete_button.clicked.connect(lambda _checked=False, row=row_idx: self._delete_dictionary_correction(row))
-            self.dictionary_corrections_table.setCellWidget(row_idx, 3, delete_button)
+                item = QTableWidgetItem(value)
+                item.setData(Qt.ItemDataRole.UserRole, source_idx)
+                self.dictionary_corrections_table.setItem(row_idx, col_idx, item)
+
+        if hasattr(self, "dictionary_status_label") and (self._dictionary_terms or self._dictionary_corrections):
+            self._set_settings_status(self.dictionary_status_label, self._dictionary_status_text(), ok=True)
+
+    def _dictionary_status_text(self) -> str:
+        query = ""
+        if hasattr(self, "dictionary_search_edit"):
+            query = self.dictionary_search_edit.text().strip()
+        total_terms = len(self._dictionary_terms)
+        total_corrections = len(self._dictionary_corrections)
+        suffix = f" Showing at most {self._dictionary_table_limit} rows per table"
+        if query:
+            suffix += f" for '{query}'."
+        else:
+            suffix += "."
+        return f"Loaded {total_terms} term(s), {total_corrections} replacement(s).{suffix}"
 
     def _add_dictionary_term(self):
         term = " ".join(self.dictionary_term_edit.text().strip().split())
@@ -3054,6 +3113,13 @@ class BloviateUI(QMainWindow):
         if 0 <= row_idx < len(self._dictionary_terms):
             self._dictionary_terms.pop(row_idx)
             self._save_dictionary_editor()
+
+    def _delete_selected_dictionary_term(self):
+        source_idx = self._selected_source_index(self.dictionary_terms_table)
+        if source_idx is None:
+            self._set_settings_status(self.dictionary_status_label, "Select a word first.", ok=False)
+            return
+        self._delete_dictionary_term(source_idx)
 
     def _add_dictionary_correction(self):
         wrong = " ".join(self.dictionary_wrong_edit.text().strip().split())
@@ -3094,6 +3160,27 @@ class BloviateUI(QMainWindow):
         if 0 <= row_idx < len(self._dictionary_corrections):
             self._dictionary_corrections.pop(row_idx)
             self._save_dictionary_editor()
+
+    def _delete_selected_dictionary_correction(self):
+        source_idx = self._selected_source_index(self.dictionary_corrections_table)
+        if source_idx is None:
+            self._set_settings_status(self.dictionary_status_label, "Select a replacement first.", ok=False)
+            return
+        self._delete_dictionary_correction(source_idx)
+
+    @staticmethod
+    def _selected_source_index(table: QTableWidget):
+        rows = table.selectionModel().selectedRows() if table.selectionModel() else []
+        if not rows:
+            return None
+        item = table.item(rows[0].row(), 0)
+        if not item:
+            return None
+        value = item.data(Qt.ItemDataRole.UserRole)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _format_int(value) -> str:
@@ -3245,7 +3332,7 @@ class BloviateUI(QMainWindow):
         query = self.achievement_search_edit.text().strip()
         status_filter = str(self.achievement_filter_combo.currentData() or "all")
         try:
-            summary = self.get_achievement_summary(query, status_filter) or {}
+            summary = self.get_achievement_summary(query, status_filter, self._achievement_table_limit) or {}
         except Exception as exc:
             self._set_settings_status(self.achievement_status_label, f"Could not load achievements: {exc}", ok=False)
             return
@@ -3268,6 +3355,7 @@ class BloviateUI(QMainWindow):
             self.achievement_recent_label.setText("Recent unlocks will appear here.")
 
         achievements = list(summary.get("achievements", []) or [])
+        matching = int(summary.get("matching", len(achievements)) or len(achievements))
         visible_achievements = achievements[: self._achievement_table_limit]
         self._achievement_rows = visible_achievements
         self.achievement_table.setUpdatesEnabled(False)
@@ -3302,9 +3390,9 @@ class BloviateUI(QMainWindow):
         self._set_settings_status(
             self.achievement_status_label,
             (
-                f"Showing first {len(visible_achievements)} of {len(achievements)} achievement(s). "
+                f"Showing first {len(visible_achievements)} of {matching} achievement(s). "
                 "Search or filter to narrow."
-                if len(achievements) > len(visible_achievements)
+                if matching > len(visible_achievements)
                 else f"Showing {len(achievements)} achievement(s)."
             ),
             ok=True,

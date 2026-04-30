@@ -1100,7 +1100,12 @@ class Bloviate:
         if hasattr(self.ui_window.signals, "show_achievement_unlocks"):
             self.ui_window.signals.show_achievement_unlocks.emit(unlocks)
 
-    def get_achievement_summary(self, query: str = "", status_filter: str = "all") -> dict:
+    def get_achievement_summary(
+        self,
+        query: str = "",
+        status_filter: str = "all",
+        limit: Optional[int] = None,
+    ) -> dict:
         """Return achievement progress for Settings."""
         self._evaluate_achievements(show=False)
         dictionary_payload, voice_status = self._achievement_context()
@@ -1109,6 +1114,7 @@ class Bloviate:
             voice_profile_status=voice_status,
             query=query,
             status_filter=status_filter,
+            limit=limit,
         )
 
     def reset_achievements(self) -> tuple[bool, str]:
@@ -2848,9 +2854,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.17</string>
+  <string>0.3.18</string>
   <key>CFBundleVersion</key>
-  <string>0.3.17</string>
+  <string>0.3.18</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>
