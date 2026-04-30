@@ -784,6 +784,7 @@ class Bloviate:
         try:
             capture_seconds = max(1.0, float(duration_s))
             self.audio_capture.clear_queue()
+            self.audio_capture.is_listening = True
             samples = []
             deadline = time.time() + capture_seconds
             while time.time() < deadline:
@@ -808,6 +809,7 @@ class Bloviate:
                 return True, f"Captured sample {enrolled}/{minimum} (RMS={rms:.4f}). Profile is ready."
             return True, f"Captured sample {enrolled}/{minimum} (RMS={rms:.4f})."
         finally:
+            self.audio_capture.is_listening = False
             self._enrollment_lock.release()
 
     def clear_voice_profile(self) -> tuple[bool, str]:
@@ -1433,6 +1435,7 @@ class Bloviate:
         print("  3. Say the phrase clearly at your normal speaking volume\n")
 
         self.audio_capture.start()
+        self.audio_capture.is_listening = False
 
         phrases = [
             "The quick brown fox jumps over the lazy dog",
@@ -1464,6 +1467,8 @@ class Bloviate:
             samples = []
             start_time = time.time()
             duration = 3.0
+            self.audio_capture.clear_queue()
+            self.audio_capture.is_listening = True
             while True:
                 elapsed = time.time() - start_time
                 remaining = duration - elapsed
@@ -1473,6 +1478,7 @@ class Bloviate:
                 chunk = self.audio_capture.get_audio_chunk(timeout=0.1)
                 if chunk is not None:
                     samples.append(chunk)
+            self.audio_capture.is_listening = False
             print("  Done.                          ")
 
             if len(samples) == 0:
@@ -1529,11 +1535,12 @@ class Bloviate:
             self.ui_window.signals.update_ptt_status.emit(True)
             self.ui_window.signals.update_status.emit("Listening...")
 
-        self.is_recording = True
         self.recorded_audio = []
         self.audio_capture.clear_queue()
         self._last_interim_text = ""
         self._last_interim_update = 0.0
+        self.is_recording = True
+        self.audio_capture.is_listening = True
 
         if self.transcriber.supports_streaming():
             # Connect asynchronously so PTT press returns immediately
@@ -1551,6 +1558,7 @@ class Bloviate:
             self.ui_window.signals.update_ptt_status.emit(False)
             self.ui_window.signals.update_status.emit("Processing...")
 
+        self.audio_capture.is_listening = False
         self.is_recording = False
 
         # Capture audio and process in background to keep PTT responsive
@@ -1641,16 +1649,26 @@ class Bloviate:
                     "processing",
                 )
             return
+        if getattr(self.audio_capture, "stream", None) is None:
+            self._start_audio_capture_async("command")
+            print("[CMD] Ignored: audio input is still starting")
+            if self.ui_window:
+                self.ui_window.signals.update_command_status.emit(
+                    "CMD: Starting microphone...",
+                    "processing",
+                )
+            return
         print("\n[CMD] Activated")
 
         if self.ui_window:
             self.ui_window.signals.update_command_status.emit("CMD: Listening...", "listening")
 
-        self.is_command_recording = True
         self.recorded_command_audio = []
         self.audio_capture.clear_queue()
         self._last_interim_text = ""
         self._last_interim_update = 0.0
+        self.is_command_recording = True
+        self.audio_capture.is_listening = True
 
         if self.transcriber.supports_streaming():
             self._start_worker(self.transcriber.start_stream, "command")
@@ -1666,6 +1684,7 @@ class Bloviate:
         if self.ui_window:
             self.ui_window.signals.update_command_status.emit("CMD: Processing...", "processing")
 
+        self.audio_capture.is_listening = False
         self.is_command_recording = False
 
         # Capture audio and process in background
@@ -2763,9 +2782,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.14</string>
+  <string>0.3.15</string>
   <key>CFBundleVersion</key>
-  <string>0.3.14</string>
+  <string>0.3.15</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>

@@ -1,9 +1,11 @@
 import sys
+import queue
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
@@ -14,6 +16,39 @@ from audio_capture import AudioCapture
 
 
 class AudioCaptureDeviceSelectionTests(unittest.TestCase):
+    def test_audio_queue_is_bounded_and_drops_oldest_chunk(self):
+        capture = AudioCapture.__new__(AudioCapture)
+        capture.audio_queue = queue.Queue(maxsize=2)
+
+        first = np.array([[1]], dtype=np.float32)
+        second = np.array([[2]], dtype=np.float32)
+        third = np.array([[3]], dtype=np.float32)
+
+        AudioCapture._put_audio_chunk(capture, first)
+        AudioCapture._put_audio_chunk(capture, second)
+        AudioCapture._put_audio_chunk(capture, third)
+
+        self.assertEqual(capture.audio_queue.qsize(), 2)
+        np.testing.assert_array_equal(capture.audio_queue.get_nowait(), second)
+        np.testing.assert_array_equal(capture.audio_queue.get_nowait(), third)
+
+    def test_queue_max_chunks_has_reasonable_floor(self):
+        config = {
+            "app": {},
+            "audio": {
+                "sample_rate": 16000,
+                "chunk_size": 1024,
+                "channels": 1,
+                "device_name": "",
+                "queue_max_chunks": 1,
+            },
+        }
+
+        with mock.patch("audio_capture.AudioCapture._find_device", return_value=None):
+            capture = AudioCapture(config)
+
+        self.assertEqual(capture.audio_queue.maxsize, 8)
+
     def test_list_input_devices_marks_default(self):
         capture = AudioCapture.__new__(AudioCapture)
 

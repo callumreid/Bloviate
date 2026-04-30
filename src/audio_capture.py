@@ -23,7 +23,11 @@ class AudioCapture:
         self.channels = config['audio']['channels']
         self.device_name = config['audio']['device_name']
 
-        self.audio_queue = queue.Queue()
+        self.queue_max_chunks = max(
+            8,
+            int(config.get('audio', {}).get('queue_max_chunks', 80) or 80),
+        )
+        self.audio_queue = queue.Queue(maxsize=self.queue_max_chunks)
         self.stream: Optional[sd.InputStream] = None
         self.is_listening = False
         self.callbacks = []
@@ -159,6 +163,9 @@ class AudioCapture:
             if status and getattr(self, "verbose_logs", False):
                 print(f"Audio callback status: {status}")
 
+            if not self.is_listening:
+                return
+
             audio_data = indata.copy()
 
             if self._needs_resample:
@@ -166,8 +173,8 @@ class AudioCapture:
                     audio_data, self._resample_up, self._resample_down, axis=0
                 ).astype(np.float32)
 
-            self.audio_queue.put(audio_data)
-            for callback in self.callbacks:
+            self._put_audio_chunk(audio_data)
+            for callback in list(self.callbacks):
                 callback(audio_data)
 
         try:
@@ -207,6 +214,7 @@ class AudioCapture:
 
     def stop(self):
         """Stop the audio stream."""
+        self.is_listening = False
         if self.stream is not None:
             self.stream.stop()
             self.stream.close()
@@ -217,6 +225,24 @@ class AudioCapture:
     def register_callback(self, callback: Callable):
         """Register a callback to receive audio data."""
         self.callbacks.append(callback)
+
+    def _put_audio_chunk(self, audio_data: np.ndarray):
+        """Put a chunk into the bounded queue, dropping the oldest on overflow."""
+        try:
+            self.audio_queue.put_nowait(audio_data)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            self.audio_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        try:
+            self.audio_queue.put_nowait(audio_data)
+        except queue.Full:
+            pass
 
     def get_audio_chunk(self, timeout: float = 1.0) -> Optional[np.ndarray]:
         """Get the next audio chunk from the queue."""
