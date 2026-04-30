@@ -2590,35 +2590,31 @@ def install_macos_launcher() -> int:
 
         return json.dumps(str(value))
 
-    def python_entrypoint() -> Path:
-        candidate = Path(sys.argv[0]).expanduser()
-        if candidate.exists() and candidate.is_file():
-            return candidate.resolve()
+    def existing_native_launcher_is_stable() -> bool:
         try:
-            text = command_path.read_text(encoding="utf-8", errors="ignore")
-            match = re.search(r'exec\\s+"([^"]+/libexec/venv/bin/bloviate)"', text)
-            if match:
-                return Path(match.group(1)).resolve()
-        except Exception:
-            pass
-        return command_path.resolve()
+            data = executable.read_bytes()
+        except OSError:
+            return False
+        # Mach-O magic numbers for native launchers. Shell fallback launchers should
+        # be regenerated because macOS permissions attach more reliably to app code.
+        if data[:4] not in {b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}:
+            return False
+        command_bytes = str(command_path).encode("utf-8", errors="ignore")
+        if command_bytes not in data:
+            return False
+        stale_markers = (
+            b"/Cellar/bloviate/",
+            b"/libexec/venv/bin/bloviate",
+            b"/libexec/venv/lib/python",
+        )
+        return not any(marker in data for marker in stale_markers)
 
-    def venv_site_packages() -> str:
+    def existing_plist_has_bundle_id() -> bool:
         try:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    "import site; print(site.getsitepackages()[0])",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            return result.stdout.strip()
-        except Exception:
-            version = f"python{sys.version_info.major}.{sys.version_info.minor}"
-            return str(Path(sys.prefix) / "lib" / version / "site-packages")
+            text = (contents_dir / "Info.plist").read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return False
+        return "com.callumreid.bloviate" in text
 
     def write_shell_launcher(reason: str):
         launch_script = f"""#!/bin/zsh
@@ -2643,8 +2639,6 @@ exec -a Bloviate {shlex.quote(str(command_path))} "$@"
         if not cc:
             return False, "native compiler not found"
 
-        entrypoint = python_entrypoint()
-        site_packages = venv_site_packages()
         include_dir = sysconfig.get_config_var("INCLUDEPY")
         lib_dir = sysconfig.get_config_var("LIBPL") or sysconfig.get_config_var("LIBDIR")
         runtime_lib_dir = sysconfig.get_config_var("LIBDIR") or lib_dir
@@ -2662,6 +2656,8 @@ exec -a Bloviate {shlex.quote(str(command_path))} "$@"
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+
+#define BLOVIATE_COMMAND {c_string(str(command_path))}
 
 static void prepend_env(const char *name, const char *value) {{
     const char *old_value = getenv(name);
@@ -2694,7 +2690,61 @@ static void load_shell_env(void) {{
     pclose(pipe);
 }}
 
-static void setup_logging(void) {{
+static int read_text_file(const char *path, char *buffer, size_t buffer_size) {{
+    FILE *file = fopen(path, "r");
+    if (!file) return 0;
+    size_t n = fread(buffer, 1, buffer_size - 1, file);
+    fclose(file);
+    buffer[n] = '\\0';
+    return n > 0;
+}}
+
+static int extract_quoted_exec_target(const char *text, char *target, size_t target_size) {{
+    const char *needle = "exec \\"";
+    const char *start = strstr(text, needle);
+    if (!start) return 0;
+    start += strlen(needle);
+    const char *end = strchr(start, '"');
+    if (!end || end <= start) return 0;
+    size_t len = (size_t)(end - start);
+    if (len >= target_size) len = target_size - 1;
+    memcpy(target, start, len);
+    target[len] = '\\0';
+    return 1;
+}}
+
+static void dirname_in_place(char *path) {{
+    char *slash = strrchr(path, '/');
+    if (slash && slash != path) *slash = '\\0';
+}}
+
+static int resolve_entrypoint(char *entrypoint, size_t entrypoint_size) {{
+    char command_text[8192];
+    if (read_text_file(BLOVIATE_COMMAND, command_text, sizeof(command_text)) &&
+        extract_quoted_exec_target(command_text, entrypoint, entrypoint_size)) {{
+        return 1;
+    }}
+    snprintf(entrypoint, entrypoint_size, "%s", BLOVIATE_COMMAND);
+    return 1;
+}}
+
+static int derive_site_packages(const char *entrypoint, char *site_packages, size_t site_packages_size) {{
+    char venv_root[4096];
+    snprintf(venv_root, sizeof(venv_root), "%s", entrypoint);
+    dirname_in_place(venv_root);  // .../venv/bin
+    dirname_in_place(venv_root);  // .../venv
+    snprintf(
+        site_packages,
+        site_packages_size,
+        "%s/lib/python%d.%d/site-packages",
+        venv_root,
+        PY_MAJOR_VERSION,
+        PY_MINOR_VERSION
+    );
+    return 1;
+}}
+
+static void setup_logging(const char *entrypoint) {{
     const char *home = getenv("HOME");
     if (!home) return;
     char dir[4096];
@@ -2713,14 +2763,19 @@ static void setup_logging(void) {{
     struct tm *local = localtime(&now);
     char stamp[64] = "";
     if (local) strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", local);
-    fprintf(stdout, "[%s] launching Bloviate native app via %s\\n", stamp, {c_string(str(entrypoint))});
+    fprintf(stdout, "[%s] launching Bloviate native app via %s\\n", stamp, entrypoint);
 }}
 
 int main(int argc, char **argv) {{
+    char entrypoint[4096];
+    char site_packages[4096];
+    resolve_entrypoint(entrypoint, sizeof(entrypoint));
+    derive_site_packages(entrypoint, site_packages, sizeof(site_packages));
+
     load_shell_env();
-    setup_logging();
+    setup_logging(entrypoint);
     prepend_env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
-    prepend_env("PYTHONPATH", {c_string(site_packages)});
+    prepend_env("PYTHONPATH", site_packages);
     setenv("PYTHONUNBUFFERED", "1", 1);
     setenv("PYTHONNOUSERSITE", "1", 1);
     setenv("BLOVIATE_APP_LAUNCHER", "1", 1);
@@ -2729,7 +2784,7 @@ int main(int argc, char **argv) {{
     char **py_argv = (char **)calloc((size_t)py_argc + 1, sizeof(char *));
     if (!py_argv) return 1;
     py_argv[0] = "Bloviate";
-    py_argv[1] = {c_string(str(entrypoint))};
+    py_argv[1] = entrypoint;
     for (int i = 1; i < argc; i++) {{
         py_argv[i + 1] = argv[i];
     }}
@@ -2757,8 +2812,19 @@ int main(int argc, char **argv) {{
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             return False, (result.stderr or result.stdout or "native compile failed").strip()
+        try:
+            source.unlink()
+        except OSError:
+            pass
         executable.chmod(0o755)
-        return True, f"native launcher compiled for {entrypoint}"
+        return True, f"native launcher compiled for stable command {command_path}"
+
+    if existing_native_launcher_is_stable() and existing_plist_has_bundle_id():
+        print(f"Installed launcher: {app_dir}")
+        print(f"Target command: {command_path}")
+        print(f"Launcher mode: existing stable native launcher kept for {command_path}")
+        print(f"Open it with: open {shlex.quote(str(app_dir))}")
+        return 0
 
     native_ok, native_message = write_native_launcher()
     if not native_ok:
@@ -2782,9 +2848,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.16</string>
+  <string>0.3.17</string>
   <key>CFBundleVersion</key>
-  <string>0.3.16</string>
+  <string>0.3.17</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>
@@ -2797,9 +2863,34 @@ int main(int argc, char **argv) {{
     (contents_dir / "Info.plist").write_text(plist, encoding="utf-8")
     (contents_dir / "PkgInfo").write_text("APPL????", encoding="utf-8")
 
+    codesign_message = ""
+    codesign = shutil.which("codesign")
+    if codesign:
+        result = subprocess.run(
+            [
+                codesign,
+                "--force",
+                "--deep",
+                "--sign",
+                "-",
+                "--identifier",
+                "com.callumreid.bloviate",
+                str(app_dir),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            codesign_message = "Ad-hoc signed bundle identifier: com.callumreid.bloviate"
+        else:
+            detail = (result.stderr or result.stdout or "codesign failed").strip()
+            codesign_message = f"Ad-hoc signing failed: {detail}"
+
     print(f"Installed launcher: {app_dir}")
     print(f"Target command: {command_path}")
     print(f"Launcher mode: {native_message}")
+    if codesign_message:
+        print(codesign_message)
     print(f"Open it with: open {shlex.quote(str(app_dir))}")
     return 0
 
