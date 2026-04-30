@@ -2826,15 +2826,12 @@ int main(int argc, char **argv) {{
         return True, f"native launcher compiled for stable command {command_path}"
 
     if existing_native_launcher_is_stable() and existing_plist_has_bundle_id():
-        print(f"Installed launcher: {app_dir}")
-        print(f"Target command: {command_path}")
-        print(f"Launcher mode: existing stable native launcher kept for {command_path}")
-        print(f"Open it with: open {shlex.quote(str(app_dir))}")
-        return 0
-
-    native_ok, native_message = write_native_launcher()
-    if not native_ok:
-        write_shell_launcher(native_message)
+        native_ok = True
+        native_message = f"existing stable native launcher kept for {command_path}"
+    else:
+        native_ok, native_message = write_native_launcher()
+        if not native_ok:
+            write_shell_launcher(native_message)
 
     plist = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
