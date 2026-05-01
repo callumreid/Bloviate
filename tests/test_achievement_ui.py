@@ -11,6 +11,19 @@ if str(SRC_ROOT) not in sys.path:
 
 
 class AchievementUISmokeTests(unittest.TestCase):
+    def test_permission_prompt_ignores_unknown_and_manual_states(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from ui import permission_status_requires_prompt
+        except Exception as exc:
+            self.skipTest(f"PyQt6 unavailable: {exc}")
+
+        self.assertFalse(permission_status_requires_prompt({"state": "granted"}))
+        self.assertFalse(permission_status_requires_prompt({"state": "manual"}))
+        self.assertFalse(permission_status_requires_prompt({"state": "unknown"}))
+        self.assertTrue(permission_status_requires_prompt({"state": "missing"}))
+        self.assertTrue(permission_status_requires_prompt({"state": "denied"}))
+
     def test_settings_achievement_grid_loads_from_summary_callback(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         try:

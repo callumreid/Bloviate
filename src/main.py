@@ -1195,7 +1195,9 @@ class Bloviate:
             microphone_detail = f"Audio input could not start: {self._audio_start_error}"
         else:
             microphone_state = "unknown"
-            microphone_detail = "Click Request Microphone to trigger the macOS microphone prompt."
+            microphone_detail = (
+                "Will be checked when dictation starts. Use Request Microphone only if capture fails."
+            )
         accessibility_granted = _macos_accessibility_trusted()
         auto_paste = bool(self.config.get("transcription", {}).get("auto_paste", True))
 
@@ -2851,9 +2853,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.18</string>
+  <string>0.3.19</string>
   <key>CFBundleVersion</key>
-  <string>0.3.18</string>
+  <string>0.3.19</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>

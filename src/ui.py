@@ -31,6 +31,15 @@ from ui_themes import (
 )
 
 
+PERMISSION_PROMPT_STATES = {"missing", "denied", "restricted"}
+
+
+def permission_status_requires_prompt(status: dict) -> bool:
+    """Return true only for permission states known to need user action."""
+    state = str((status or {}).get("state", "") or "").strip().lower()
+    return state in PERMISSION_PROMPT_STATES
+
+
 class UISignals(QObject):
     """Signals for thread-safe UI updates."""
     update_audio_level = pyqtSignal(float)
@@ -2203,6 +2212,8 @@ class BloviateUI(QMainWindow):
             detail = status.get("detail", "")
             if state == "granted":
                 prefix = "OK"
+            elif state == "unknown":
+                prefix = "Not checked"
             elif state == "manual":
                 prefix = "Check"
                 all_ready = False
@@ -2250,7 +2261,7 @@ class BloviateUI(QMainWindow):
         missing = [
             status
             for status in statuses.values()
-            if status.get("state") in {"missing", "unknown"}
+            if permission_status_requires_prompt(status)
         ]
         if not missing:
             return
