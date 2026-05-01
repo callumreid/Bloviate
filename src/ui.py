@@ -10,10 +10,11 @@ from PyQt6.QtWidgets import (
     QSlider, QCheckBox, QMessageBox, QScrollArea, QLineEdit,
     QTextEdit, QFormLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QFileDialog, QSizePolicy,
-    QGridLayout, QColorDialog, QButtonGroup
+    QGridLayout, QColorDialog, QButtonGroup, QToolTip
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker, QRectF, QSize
 from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter, QPen
+from datetime import date, timedelta
 import sys
 import time
 import numpy as np
@@ -885,28 +886,95 @@ class InsightStreakHeatmap(QWidget):
         super().__init__(parent)
         self.days = []
         self.theme_colors = get_theme("light")["colors"]
-        self.heatmap_colors = ["#F0E9DE", "#CFEDEA", "#72C9BE", "#2D8B7E", "#1F6F68"]
+        self.heatmap_colors = ["#EBEDF0", "#9BE9A8", "#40C463", "#30A14E", "#216E39"]
+        self._cell_hitboxes = []
+        self._last_tooltip = ""
+        self.setMouseTracking(True)
         self.setMinimumHeight(166)
 
     def set_theme_colors(self, colors: dict):
         self.theme_colors = dict(colors or self.theme_colors)
         self.heatmap_colors = [
-            self.theme_colors.get("surface_alt", "#F0E9DE"),
-            self.theme_colors.get("card_alt", "#CFEDEA"),
-            self.theme_colors.get("command", "#72C9BE"),
-            self.theme_colors.get("primary", "#2D8B7E"),
-            self.theme_colors.get("success", "#1F6F68"),
+            "#EBEDF0",
+            "#9BE9A8",
+            "#40C463",
+            "#30A14E",
+            "#216E39",
         ]
         self.update()
 
     def set_days(self, days: list[dict]):
         self.days = list(days or [])
+        self._cell_hitboxes = []
         self.update()
+
+    @staticmethod
+    def _parse_day(day: dict) -> date | None:
+        try:
+            return date.fromisoformat(str(day.get("date", "")))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _bucket_for_words(words: int, max_words: int) -> int:
+        words = max(0, int(words or 0))
+        max_words = max(1, int(max_words or 1))
+        if words <= 0:
+            return 0
+        ratio = words / max_words
+        if ratio <= 0.25:
+            return 1
+        if ratio <= 0.5:
+            return 2
+        if ratio <= 0.75:
+            return 3
+        return 4
+
+    @staticmethod
+    def _format_day_tooltip(day: dict) -> str:
+        parsed = InsightStreakHeatmap._parse_day(day)
+        if parsed:
+            date_label = f"{parsed.strftime('%a, %b')} {parsed.day}, {parsed.year}"
+        else:
+            date_label = str(day.get("date", "Unknown date") or "Unknown date")
+        words = max(0, int(day.get("words", 0) or 0))
+        transcripts = max(0, int(day.get("transcripts", 0) or 0))
+        word_label = "word" if words == 1 else "words"
+        transcript_label = "entry" if transcripts == 1 else "entries"
+        if words == 0 and transcripts == 0:
+            return f"{date_label}\nNo dictation"
+        return f"{date_label}\n{words:,} {word_label}\n{transcripts:,} {transcript_label}"
+
+    @staticmethod
+    def _weekday_row(day_date: date) -> int:
+        return (day_date.weekday() + 1) % 7
+
+    def _positioned_days(self, days: list[dict]) -> tuple[list[tuple[dict, int, int]], int]:
+        parsed_days = []
+        for day in days:
+            parsed = self._parse_day(day)
+            if parsed is not None:
+                parsed_days.append((day, parsed))
+        if not parsed_days:
+            return [], 0
+
+        parsed_days.sort(key=lambda item: item[1])
+        start_date = parsed_days[0][1]
+        grid_start = start_date - timedelta(days=self._weekday_row(start_date))
+        positioned = []
+        max_col = 0
+        for day, parsed in parsed_days:
+            col = max(0, (parsed - grid_start).days // 7)
+            row = self._weekday_row(parsed)
+            max_col = max(max_col, col)
+            positioned.append((day, col, row))
+        return positioned, max_col + 1
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
+        self._cell_hitboxes = []
 
         days = self.days[-84:]
         if not days:
@@ -915,9 +983,18 @@ class InsightStreakHeatmap(QWidget):
             painter.end()
             return
 
+        positioned_days, columns = self._positioned_days(days)
+        if not positioned_days:
+            painter.setPen(QColor(self.theme_colors.get("muted", "#6F665E")))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No dictation history yet")
+            painter.end()
+            return
+
         max_words = max([int(day.get("words", 0) or 0) for day in days] + [1])
-        cell = min(14, max(8, int((self.width() - 34) / 14)))
-        gap = 6
+        gap = 4
+        label_width = 28
+        usable_width = max(120, self.width() - label_width - 12)
+        cell = min(13, max(7, int((usable_width - gap * max(0, columns - 1)) / max(1, columns))))
         start_x = 8
         start_y = 20
 
@@ -930,21 +1007,20 @@ class InsightStreakHeatmap(QWidget):
             painter.drawText(0, start_y + row * (cell + gap) + cell - 2, label[:3])
 
         painter.setPen(Qt.PenStyle.NoPen)
-        grid_x = start_x + 30
-        for idx, day in enumerate(days):
-            col = idx // 7
-            row = idx % 7
+        grid_x = start_x + label_width
+        for day, col, row in positioned_days:
             words = int(day.get("words", 0) or 0)
-            if words <= 0:
-                color_index = 0
-            else:
-                color_index = min(4, 1 + int((words / max_words) * 3.99))
+            color_index = self._bucket_for_words(words, max_words)
             painter.setBrush(QColor(self.heatmap_colors[color_index]))
-            painter.drawRoundedRect(
+            rect = QRectF(
                 grid_x + col * (cell + gap),
                 start_y + row * (cell + gap),
                 cell,
                 cell,
+            )
+            self._cell_hitboxes.append((rect, day))
+            painter.drawRoundedRect(
+                rect,
                 3,
                 3,
             )
@@ -963,6 +1039,23 @@ class InsightStreakHeatmap(QWidget):
             "More",
         )
         painter.end()
+
+    def mouseMoveEvent(self, event):
+        position = event.position() if hasattr(event, "position") else event.pos()
+        for rect, day in self._cell_hitboxes:
+            if rect.contains(position):
+                tooltip = self._format_day_tooltip(day)
+                if tooltip != self._last_tooltip:
+                    self._last_tooltip = tooltip
+                    QToolTip.showText(event.globalPosition().toPoint(), tooltip, self)
+                return
+        self._last_tooltip = ""
+        QToolTip.hideText()
+
+    def leaveEvent(self, event):
+        self._last_tooltip = ""
+        QToolTip.hideText()
+        super().leaveEvent(event)
 
 
 class InsightCard(QFrame):

@@ -24,6 +24,27 @@ class AchievementUISmokeTests(unittest.TestCase):
         self.assertTrue(permission_status_requires_prompt({"state": "missing"}))
         self.assertTrue(permission_status_requires_prompt({"state": "denied"}))
 
+    def test_streak_heatmap_uses_relative_word_buckets_and_tooltips(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            from ui import InsightStreakHeatmap
+        except Exception as exc:
+            self.skipTest(f"PyQt6 unavailable: {exc}")
+
+        self.assertEqual(InsightStreakHeatmap._bucket_for_words(0, 100), 0)
+        self.assertEqual(InsightStreakHeatmap._bucket_for_words(1, 100), 1)
+        self.assertEqual(InsightStreakHeatmap._bucket_for_words(50, 100), 2)
+        self.assertEqual(InsightStreakHeatmap._bucket_for_words(75, 100), 3)
+        self.assertEqual(InsightStreakHeatmap._bucket_for_words(100, 100), 4)
+
+        tooltip = InsightStreakHeatmap._format_day_tooltip(
+            {"date": "2026-05-01", "words": 1234, "transcripts": 2}
+        )
+
+        self.assertIn("Fri, May 1, 2026", tooltip)
+        self.assertIn("1,234 words", tooltip)
+        self.assertIn("2 entries", tooltip)
+
     def test_settings_achievement_grid_loads_from_summary_callback(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         try:
