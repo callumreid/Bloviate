@@ -433,19 +433,14 @@ class BottomOverlayIndicator(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        # Use a plain Window — not Tool (NSPanel), which macOS silently
-        # hides when there is no visible parent window.
         self.setWindowFlags(
-            Qt.WindowType.Window
+            Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._closed = False
         self._objc = None  # cached ctypes handles
-        self._visibility_timer = QTimer(self)
-        self._visibility_timer.setInterval(2000)
-        self._visibility_timer.timeout.connect(self._ensure_visible)
         # Defer show until the event loop is running
         QTimer.singleShot(0, self._initial_show)
 
@@ -496,17 +491,17 @@ class BottomOverlayIndicator(QWidget):
             msg = lib.objc_msgSend
             sel = lib.sel_registerName
 
-            # Window level: NSStatusWindowLevel (25)
+            # Keep this below the status-window level. Repeatedly forcing a
+            # status-level Window caused macOS to report Bloviate as hung on
+            # some machines even when the Qt event loop was idle.
             msg.restype = None
             msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
-            msg(ns_window, sel(b'setLevel:'), 25)
+            msg(ns_window, sel(b'setLevel:'), 8)
 
             # Collection behavior:
-            #   canJoinAllSpaces(1) | stationary(16) |
-            #   ignoresCycle(64)    | fullScreenAuxiliary(256)
+            #   canJoinAllSpaces(1) | fullScreenAuxiliary(256)
             msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
-            msg(ns_window, sel(b'setCollectionBehavior:'),
-                1 | 16 | 64 | 256)
+            msg(ns_window, sel(b'setCollectionBehavior:'), 1 | 256)
 
             # Don't hide when the app loses focus
             msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
@@ -516,10 +511,6 @@ class BottomOverlayIndicator(QWidget):
             msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
             msg(ns_window, sel(b'setIgnoresMouseEvents:'), True)
 
-            # Force the window on screen regardless of app activation
-            msg.restype = None
-            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            msg(ns_window, sel(b'orderFrontRegardless'))
         except Exception as e:
             print(f"Warning: could not set macOS overlay properties: {e}")
 
@@ -533,7 +524,6 @@ class BottomOverlayIndicator(QWidget):
         # Short delay so the native NSWindow is fully wired up before
         # we poke at it through the Objective-C runtime.
         QTimer.singleShot(50, self._apply_macos_window_properties)
-        self._visibility_timer.start()
 
     def _ensure_visible(self):
         """Watchdog: re-show and reconfigure the overlay if it vanished."""
@@ -551,7 +541,6 @@ class BottomOverlayIndicator(QWidget):
         if self._closed:
             return
         self._closed = True
-        self._visibility_timer.stop()
         self._pulse_timer.stop()
         self._hold_timer.stop()
         self._message_timer.stop()
@@ -4396,7 +4385,7 @@ class StartupSplash(QWidget):
         return msg(int(self.winId()), lib.sel_registerName(b'window')) or None
 
     def _force_front_macos(self):
-        """Force splash to front on macOS even when launched from Terminal."""
+        """Best-effort native splash setup without forcing app activation."""
         pair = self._get_objc()
         if pair is None:
             return
@@ -4408,10 +4397,8 @@ class StartupSplash(QWidget):
             msg = lib.objc_msgSend
             sel = lib.sel_registerName
             msg.restype = None
-            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
-            msg(ns_window, sel(b'setLevel:'), 25)  # NSStatusWindowLevel
-            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            msg(ns_window, sel(b'orderFrontRegardless'))
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
+            msg(ns_window, sel(b'setHidesOnDeactivate:'), False)
         except Exception:
             return
 
@@ -4429,8 +4416,6 @@ class StartupSplash(QWidget):
         self.setWindowOpacity(1.0)
         self.show()
         self.raise_()
-        self.activateWindow()
-        QApplication.processEvents()
         self._force_front_macos()
         if self._show_cows:
             self._cow_timer.start()

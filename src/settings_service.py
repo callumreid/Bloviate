@@ -172,8 +172,11 @@ def _migrate_config(data: dict) -> dict:
     if width < 1000 or height < 720:
         ui_config["window_size"] = [1180, 860]
     splash_config = ui_config.setdefault("startup_splash", {})
-    splash_config.setdefault("enabled", True)
+    splash_config.setdefault("enabled", False)
     splash_config.setdefault("show_cows", True)
+    overlay_config = ui_config.setdefault("ptt_overlay", {})
+    overlay_config.setdefault("enabled", False)
+    overlay_config.setdefault("margin", 20)
     permissions_config = ui_config.setdefault("permissions_prompt", {})
     permissions_config.setdefault("enabled", True)
     ptt_config = _config_section(data, "ptt")
@@ -187,11 +190,11 @@ def _migrate_config(data: dict) -> dict:
         ptt_config["listener_backend"] = "auto"
     try:
         ptt_config["modifier_poll_interval_ms"] = max(
-            10,
-            int(ptt_config.get("modifier_poll_interval_ms", 20)),
+            40,
+            int(ptt_config.get("modifier_poll_interval_ms", 40)),
         )
     except (TypeError, ValueError):
-        ptt_config["modifier_poll_interval_ms"] = 20
+        ptt_config["modifier_poll_interval_ms"] = 40
     if not str(ptt_config.get("mode_cycle_tap_key", "") or "").strip():
         ptt_config["mode_cycle_tap_key"] = "<cmd>"
     try:
@@ -219,7 +222,9 @@ def _migrate_config(data: dict) -> dict:
     history_config["enabled"] = bool(history_config.get("enabled", True))
     achievements_config = _config_section(data, "achievements")
     achievements_config["enabled"] = bool(achievements_config.get("enabled", True))
-    achievements_config["celebrations"] = str(achievements_config.get("celebrations", "full") or "full")
+    achievements_config["celebrations"] = str(
+        achievements_config.get("celebrations", "subtle") or "subtle"
+    )
     achievements_config["ai_analysis_enabled"] = bool(
         achievements_config.get("ai_analysis_enabled", False)
     )

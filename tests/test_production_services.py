@@ -61,8 +61,14 @@ class ProductionServiceTests(unittest.TestCase):
             self.assertEqual(config["ui"]["waveform"]["preset"], "theme")
             self.assertEqual(config["ptt"]["hotkey"], "<cmd>+<option>")
             self.assertTrue(config["history"]["enabled"])
+            self.assertEqual(config["history"]["settings_table_limit"], 24)
             self.assertTrue(config["achievements"]["enabled"])
+            self.assertEqual(config["achievements"]["celebrations"], "subtle")
             self.assertFalse(config["achievements"]["ai_analysis_enabled"])
+            self.assertEqual(config["achievements"]["settings_table_limit"], 24)
+            self.assertFalse(config["ui"]["startup_splash"]["enabled"])
+            self.assertFalse(config["ui"]["ptt_overlay"]["enabled"])
+            self.assertEqual(config["ptt"]["modifier_poll_interval_ms"], 40)
 
     def test_history_store_insert_search_delete_export(self):
         with tempfile.TemporaryDirectory() as tempdir:

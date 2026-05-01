@@ -25,7 +25,7 @@ ptt:
   secondary_hotkey: "<fn>"  # Optional secondary PTT hotkey
   toggle_hotkey: "<cmd>+<option>+<shift>"  # Toggle dictation on/off without holding keys
   listener_backend: "auto"  # macOS uses modifier polling for reliable modifier-only PTT
-  modifier_poll_interval_ms: 20
+  modifier_poll_interval_ms: 40
   mode_cycle_tap_key: "<cmd>"  # Tap quickly to cycle output cleanup mode
   mode_cycle_tap_count: 3
   mode_cycle_tap_window_ms: 650
@@ -83,17 +83,17 @@ transcription:
 history:
   enabled: true  # Text-only local history; raw audio is never stored by default
   max_ui_records: 100
-  settings_table_limit: 50
+  settings_table_limit: 24
 
 # Local achievements
 achievements:
   enabled: true
-  celebrations: "full"  # full, subtle, off
+  celebrations: "subtle"  # full, subtle, off
   ai_analysis_enabled: false  # Sends transcript text to OpenAI only when explicitly enabled
   ai_analysis_model: "gpt-4o"
   ai_analysis_timeout_s: 12
   backfill_on_startup: true
-  settings_table_limit: 40
+  settings_table_limit: 24
 
 # Post-processing / cleanup
 post_processing:
@@ -158,7 +158,7 @@ openai:
 # UI
 ui:
   startup_splash:
-    enabled: true  # Show native splash card on app startup
+    enabled: false  # Keep startup conservative; users can re-enable the splash in Settings
     show_cows: true
     duration_ms: 1400
     fade_out_ms: 220
@@ -185,5 +185,5 @@ ui:
   show_menubar_indicator: true  # Show status in macOS menu bar
   show_main_window: true  # Keep dashboard visible by default for first-run setup
   ptt_overlay:
-    enabled: true
+    enabled: false
     margin: 20  # Distance from bottom of screen
