@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QGridLayout, QColorDialog, QButtonGroup, QToolTip
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker, QRectF, QSize
-from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter, QPen
+from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter, QPen, QCursor
 from datetime import date, timedelta
 import sys
 import time
@@ -601,11 +601,12 @@ class BottomOverlayIndicator(QWidget):
         self._message_state = str(state or "mode").strip()
         if self._message_text:
             self._set_overlay_width(self._MESSAGE_WIDTH)
+            self._position_bottom_center()
             self._message_timer.start(max(500, int(hold_ms)))
         self.update()
 
     def _position_bottom_center(self):
-        screen = QApplication.primaryScreen()
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if not screen:
             return
         geo = screen.availableGeometry()
@@ -636,12 +637,14 @@ class BottomOverlayIndicator(QWidget):
     def set_recording(self):
         self._clear_hold()
         self._clear_message()
+        self._position_bottom_center()
         self.current_state = "recording"
         self._stop_pulse()
         self.update()
 
     def set_processing(self):
         self._clear_hold()
+        self._position_bottom_center()
         self.current_state = "processing"
         self._processing_phase = 0
         self._start_pulse()
@@ -650,12 +653,14 @@ class BottomOverlayIndicator(QWidget):
     def set_command_recording(self):
         self._clear_hold()
         self._clear_message()
+        self._position_bottom_center()
         self.current_state = "command_recording"
         self._stop_pulse()
         self.update()
 
     def set_command_processing(self):
         self._clear_hold()
+        self._position_bottom_center()
         self.current_state = "command_processing"
         self._processing_phase = 0
         self._start_pulse()
@@ -710,13 +715,11 @@ class BottomOverlayIndicator(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
 
-        # Equalizer bars only — no background
         has_message = bool(self._message_text)
-        if has_message:
-            background = QColor(self.waveform_palette.get("background", "#FFFDF7"))
-            background.setAlpha(236)
-            painter.setBrush(background)
-            painter.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
+        background = QColor(self.waveform_palette.get("background", "#FFFDF7"))
+        background.setAlpha(236 if has_message else 196)
+        painter.setBrush(background)
+        painter.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
 
         level = max(0.0, min(self.audio_level, 1.0))
         meter_w = self._SIZE
