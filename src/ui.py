@@ -1664,28 +1664,14 @@ class BloviateUI(QMainWindow):
         self.insight_wpm_card.layout.addWidget(self.insight_wpm_gauge)
         insights_grid.addWidget(self.insight_wpm_card, 0, 0)
 
-        self.insight_fixes_card = InsightCard("Fixes made", "cleanup and dictionary")
-        self.insight_fixes_value = QLabel("0")
-        self.insight_fixes_value.setObjectName("InsightNumber")
-        self.insight_changed_words_label = QLabel("0 words rewritten")
-        self.insight_dictionary_rules_label = QLabel("0 dictionary rules active")
-        self.insight_fixes_card.layout.addWidget(self.insight_fixes_value)
-        self.insight_fixes_card.layout.addWidget(self.insight_changed_words_label)
-        self.insight_fixes_card.layout.addWidget(self.insight_dictionary_rules_label)
-        self.insight_fixes_card.layout.addStretch()
-        insights_grid.addWidget(self.insight_fixes_card, 0, 1)
-
         self.insight_words_card = InsightCard("Total words dictated", "local history")
         self.insight_total_words_value = QLabel("0")
         self.insight_total_words_value.setObjectName("InsightNumber")
         self.insight_total_transcripts_label = QLabel("0 saved transcripts")
-        self.insight_mode_bar = QProgressBar()
-        self.insight_mode_bar.setRange(0, 100)
         self.insight_words_card.layout.addWidget(self.insight_total_words_value)
         self.insight_words_card.layout.addWidget(self.insight_total_transcripts_label)
-        self.insight_words_card.layout.addWidget(self.insight_mode_bar)
         self.insight_words_card.layout.addStretch()
-        insights_grid.addWidget(self.insight_words_card, 0, 2)
+        insights_grid.addWidget(self.insight_words_card, 0, 1, 1, 2)
 
         self.insight_apps_card = InsightCard("Desktop usage", "top target apps")
         self.insight_apps_summary_label = QLabel("Apps used | 0")
@@ -3304,9 +3290,6 @@ class BloviateUI(QMainWindow):
         total_words = int(insights.get("total_words", 0) or 0)
         total_transcripts = int(insights.get("total_transcripts", 0) or 0)
         wpm = int(insights.get("words_per_minute", 0) or 0)
-        changed_outputs = int(insights.get("changed_outputs", 0) or 0)
-        changed_words = int(insights.get("changed_words", 0) or 0)
-        dictionary_corrections = int(insights.get("dictionary_corrections", 0) or 0)
 
         if wpm <= 0:
             pace_caption = "No timed clips yet"
@@ -3322,24 +3305,8 @@ class BloviateUI(QMainWindow):
         self.insight_wpm_value.setText(self._format_int(wpm))
         self.insight_wpm_gauge.set_data(min(wpm / 220.0, 1.0), pace_caption, "pace")
 
-        self.insight_fixes_value.setText(self._format_int(changed_outputs))
-        self.insight_changed_words_label.setText(f"{self._format_int(changed_words)} words rewritten")
-        self.insight_dictionary_rules_label.setText(
-            f"{self._format_int(dictionary_corrections)} dictionary rules active"
-        )
-
         self.insight_total_words_value.setText(self._format_int(total_words))
         self.insight_total_transcripts_label.setText(f"{self._format_int(total_transcripts)} saved transcripts")
-
-        mode_usage = insights.get("mode_usage", {}) or {}
-        if mode_usage:
-            dominant_mode, dominant_words = max(mode_usage.items(), key=lambda item: item[1])
-            percent = int(round((float(dominant_words) / max(1, total_words)) * 100))
-            self.insight_mode_bar.setValue(percent)
-            self.insight_mode_bar.setFormat(f"{percent}% {str(dominant_mode).replace('_', ' ')}")
-        else:
-            self.insight_mode_bar.setValue(0)
-            self.insight_mode_bar.setFormat("No dictation yet")
 
         apps = list(insights.get("app_usage", []) or [])
         apps_total_words = sum(int(app.get("words", 0) or 0) for app in apps) or 1
