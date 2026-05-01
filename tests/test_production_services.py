@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -35,6 +36,23 @@ class FakeKeyring:
 
 
 class ProductionServiceTests(unittest.TestCase):
+    def test_voice_fingerprint_import_does_not_load_torch_stack(self):
+        code = (
+            "import sys; "
+            f"sys.path.insert(0, {str(SRC_ROOT)!r}); "
+            "import voice_fingerprint; "
+            "print('torch' in sys.modules, 'speechbrain' in sys.modules, 'torchaudio' in sys.modules)"
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+        self.assertEqual(result.stdout.strip(), "False False False")
+
     def test_settings_service_saves_without_runtime_metadata(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_path = Path(tempdir) / "config.yaml"

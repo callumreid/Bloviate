@@ -47,6 +47,7 @@ voice_fingerprint:
   mode: "whisper"  # whisper (verify) or talk (bypass verification)
   threshold: 0.60  # 0-1, higher = stricter matching (raise to reject cross-talk)
   verify_on_raw_audio: true  # Preserve speaker cues by verifying before denoise
+  load_model_on_startup: false  # Load SpeechBrain lazily so the UI opens immediately
   embedding_model: "speechbrain/spkrec-ecapa-voxceleb"
   min_enrollment_samples: 8  # More enrollment samples improve separation in noisy rooms
 

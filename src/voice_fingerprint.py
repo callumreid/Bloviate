@@ -5,11 +5,11 @@ Uses speaker embeddings to verify that audio matches the enrolled user's voice.
 
 import inspect
 import numpy as np
-import torch
-import torchaudio
-
-# Apply compatibility patch for newer torchaudio versions
-import torchaudio_patch
+from typing import Optional, List
+import os
+import pickle
+from pathlib import Path
+import shutil
 
 
 def _patch_huggingface_hub():
@@ -47,20 +47,38 @@ def _patch_huggingface_hub():
         pass
 
 
-_patch_huggingface_hub()
+_torch = None
+_EncoderClassifier = None
+_encoder_import_error = None
 
-try:
-    from speechbrain.inference import EncoderClassifier
-except Exception:
+
+def _load_encoder_classifier():
+    """Import Torch/SpeechBrain only when voice verification actually needs it."""
+    global _torch, _EncoderClassifier, _encoder_import_error
+    if _EncoderClassifier is not None:
+        return _EncoderClassifier
+    if _encoder_import_error is not None:
+        raise _encoder_import_error
+
     try:
-        from speechbrain.pretrained import EncoderClassifier
-    except Exception:
-        EncoderClassifier = None
-from typing import Optional, List
-import os
-import pickle
-from pathlib import Path
-import shutil
+        import torch as torch_module
+
+        # Apply compatibility patch for newer torchaudio versions. This imports
+        # torchaudio, so keep it off the app startup path.
+        import torchaudio_patch  # noqa: F401
+
+        _patch_huggingface_hub()
+        try:
+            from speechbrain.inference import EncoderClassifier as classifier
+        except Exception:
+            from speechbrain.pretrained import EncoderClassifier as classifier
+
+        _torch = torch_module
+        _EncoderClassifier = classifier
+        return _EncoderClassifier
+    except Exception as exc:
+        _encoder_import_error = exc
+        raise
 
 from app_paths import (
     config_base_dir,
@@ -102,27 +120,43 @@ class VoiceFingerprint:
         self.profile_path = self.model_dir / "voice_profile.pkl"
         self.legacy_profile_path = legacy_repo_voice_profile_path()
 
-        # Load speaker embedding model
-        if self.verbose_logs:
-            print("Loading speaker embedding model...")
-        try:
-            if EncoderClassifier is None:
-                raise RuntimeError("SpeechBrain EncoderClassifier unavailable")
-            self.encoder = EncoderClassifier.from_hparams(
-                source=self.model_name,
-                savedir=str(self.model_dir / "pretrained")
-            )
-            if self.verbose_logs:
-                print("Speaker embedding model loaded")
-        except Exception as e:
-            print(f"Error loading embedding model: {e}")
-            self.enabled = False
-            self.encoder = None
+        self.encoder = None
+        self._encoder_load_attempted = False
 
         # Load existing voice profile if available
         self.enrolled_embeddings: List[np.ndarray] = []
         self.reference_embedding: Optional[np.ndarray] = None
         self.load_profile()
+
+        if bool(config.get("voice_fingerprint", {}).get("load_model_on_startup", False)):
+            self._ensure_encoder_loaded()
+
+    def _ensure_encoder_loaded(self) -> bool:
+        """Load the speaker embedding model on first use."""
+        if not self.enabled:
+            return False
+        if self.encoder is not None:
+            return True
+        if self._encoder_load_attempted:
+            return False
+
+        self._encoder_load_attempted = True
+        if self.verbose_logs:
+            print("Loading speaker embedding model...")
+        try:
+            classifier = _load_encoder_classifier()
+            self.encoder = classifier.from_hparams(
+                source=self.model_name,
+                savedir=str(self.model_dir / "pretrained")
+            )
+            if self.verbose_logs:
+                print("Speaker embedding model loaded")
+            return True
+        except Exception as e:
+            print(f"Error loading embedding model: {e}")
+            self.enabled = False
+            self.encoder = None
+            return False
 
     def extract_embedding(self, audio: np.ndarray) -> Optional[np.ndarray]:
         """
@@ -134,7 +168,9 @@ class VoiceFingerprint:
         Returns:
             Embedding vector or None if extraction fails
         """
-        if not self.enabled or self.encoder is None:
+        if not self.enabled:
+            return None
+        if not self._ensure_encoder_loaded() or self.encoder is None or _torch is None:
             return None
 
         try:
@@ -143,14 +179,14 @@ class VoiceFingerprint:
                 audio = audio.squeeze()
 
             # Convert to torch tensor
-            audio_tensor = torch.from_numpy(audio).float()
+            audio_tensor = _torch.from_numpy(audio).float()
 
             # Add batch dimension
             if len(audio_tensor.shape) == 1:
                 audio_tensor = audio_tensor.unsqueeze(0)
 
             # Extract embedding
-            with torch.no_grad():
+            with _torch.no_grad():
                 embedding = self.encoder.encode_batch(audio_tensor)
                 embedding = embedding.squeeze().cpu().numpy()
 
