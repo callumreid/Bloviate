@@ -85,7 +85,7 @@ class ProductionServiceTests(unittest.TestCase):
             self.assertFalse(config["achievements"]["ai_analysis_enabled"])
             self.assertEqual(config["achievements"]["settings_table_limit"], 24)
             self.assertFalse(config["ui"]["startup_splash"]["enabled"])
-            self.assertFalse(config["ui"]["ptt_overlay"]["enabled"])
+            self.assertTrue(config["ui"]["ptt_overlay"]["enabled"])
             self.assertEqual(config["ptt"]["modifier_poll_interval_ms"], 40)
 
     def test_history_store_insert_search_delete_export(self):

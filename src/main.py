@@ -605,6 +605,8 @@ class Bloviate:
         # Load configuration
         self.config, _ = _load_config(config_path)
         self.settings_service = SettingsService(self.config)
+        if self.config.pop("__config_migrated__", False):
+            self.settings_service.save()
         self.secret_store = SecretStore()
         self.model_registry = ModelRegistry()
         self.history_store = HistoryStore()
@@ -2309,6 +2311,10 @@ class Bloviate:
                 print(f"[Post-processing] {processed.mode}/{processed.provider}: {output_text}")
 
             self.transcriber.output_text(output_text)
+            paste_blocked = (
+                bool(self.config.get("transcription", {}).get("auto_paste", True))
+                and getattr(self.transcriber, "last_auto_paste_success", None) is False
+            )
             self._record_history(
                 text=output_text,
                 original_text=processed.original_text,
@@ -2322,7 +2328,10 @@ class Bloviate:
 
             if self.ui_window:
                 self.ui_window.signals.update_transcription.emit(output_text)
-                self.ui_window.signals.update_status.emit("Ready")
+                if paste_blocked:
+                    self.ui_window.signals.update_status.emit("Auto-paste blocked by macOS permissions")
+                else:
+                    self.ui_window.signals.update_status.emit("Ready")
         else:
             print("✗ No transcription generated")
             if self.ui_window:
@@ -2833,15 +2842,20 @@ int main(int argc, char **argv) {{
         executable.chmod(0o755)
         return True, f"native launcher compiled for stable command {command_path}"
 
-    if existing_native_launcher_is_stable() and existing_plist_has_bundle_id():
+    preserve_existing_bundle = existing_native_launcher_is_stable() and existing_plist_has_bundle_id()
+    if preserve_existing_bundle:
         native_ok = True
-        native_message = f"existing stable native launcher kept for {command_path}"
+        native_message = (
+            f"existing stable native launcher kept for {command_path}; "
+            "app bundle preserved to keep macOS permissions stable"
+        )
     else:
         native_ok, native_message = write_native_launcher()
         if not native_ok:
             write_shell_launcher(native_message)
 
-    plist = """<?xml version="1.0" encoding="UTF-8"?>
+    if not preserve_existing_bundle:
+        plist = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -2859,9 +2873,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.25</string>
+  <string>0.3.26</string>
   <key>CFBundleVersion</key>
-  <string>0.3.25</string>
+  <string>0.3.26</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>
@@ -2871,12 +2885,14 @@ int main(int argc, char **argv) {{
 </dict>
 </plist>
 """
-    (contents_dir / "Info.plist").write_text(plist, encoding="utf-8")
-    (contents_dir / "PkgInfo").write_text("APPL????", encoding="utf-8")
+        (contents_dir / "Info.plist").write_text(plist, encoding="utf-8")
+        (contents_dir / "PkgInfo").write_text("APPL????", encoding="utf-8")
 
     codesign_message = ""
     codesign = shutil.which("codesign")
-    if codesign:
+    if preserve_existing_bundle:
+        codesign_message = "Skipped re-signing existing app bundle to preserve macOS permission trust."
+    elif codesign:
         result = subprocess.run(
             [
                 codesign,

@@ -136,6 +136,9 @@ def _migrate_config(data: dict) -> dict:
     except (TypeError, ValueError):
         config_version = 0
     is_legacy_config = config_version < 6
+    latest_config_version = 7
+    if config_version < latest_config_version:
+        data["__config_migrated__"] = True
 
     audio_config = _config_section(data, "audio")
     audio_config["start_on_launch"] = bool(audio_config.get("start_on_launch", False))
@@ -175,7 +178,10 @@ def _migrate_config(data: dict) -> dict:
     splash_config.setdefault("enabled", False)
     splash_config.setdefault("show_cows", True)
     overlay_config = ui_config.setdefault("ptt_overlay", {})
-    overlay_config.setdefault("enabled", False)
+    if config_version < 7:
+        overlay_config["enabled"] = True
+    else:
+        overlay_config["enabled"] = bool(overlay_config.get("enabled", True))
     overlay_config.setdefault("margin", 20)
     permissions_config = ui_config.setdefault("permissions_prompt", {})
     permissions_config.setdefault("enabled", True)
@@ -250,7 +256,7 @@ def _migrate_config(data: dict) -> dict:
         post_processing_config["openai_enabled"] = bool(
             post_processing_config.get("openai_enabled", True)
         )
-    app_config["config_version"] = 6
+    app_config["config_version"] = latest_config_version
     return data
 
 

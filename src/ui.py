@@ -420,6 +420,9 @@ class BottomOverlayIndicator(QWidget):
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(85)
         self._pulse_timer.timeout.connect(self._toggle_pulse)
+        self._visibility_timer = QTimer(self)
+        self._visibility_timer.setInterval(2500)
+        self._visibility_timer.timeout.connect(self._ensure_visible)
         self._hold_timer = QTimer(self)
         self._hold_timer.setSingleShot(True)
         self._hold_timer.timeout.connect(self._clear_hold_and_idle)
@@ -522,6 +525,8 @@ class BottomOverlayIndicator(QWidget):
     def _initial_show(self):
         self._position_bottom_center()
         self.show()
+        if not self._visibility_timer.isActive():
+            self._visibility_timer.start()
         # Short delay so the native NSWindow is fully wired up before
         # we poke at it through the Objective-C runtime.
         QTimer.singleShot(50, self._apply_macos_window_properties)
@@ -543,6 +548,7 @@ class BottomOverlayIndicator(QWidget):
             return
         self._closed = True
         self._pulse_timer.stop()
+        self._visibility_timer.stop()
         self._hold_timer.stop()
         self._message_timer.stop()
         super().close()
@@ -4202,6 +4208,8 @@ class BloviateUI(QMainWindow):
                 self.ptt_overlay.set_idle()
             elif message in ["Voice rejected", "No audio recorded", "No speech detected"]:
                 self.ptt_overlay.set_rejected()
+            elif message.startswith("Auto-paste blocked"):
+                self.ptt_overlay.show_message("PASTE BLOCKED", state="rejected", hold_ms=3200)
 
     def _update_transcription(self, text: str):
         """Update the last transcription display."""

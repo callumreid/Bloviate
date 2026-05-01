@@ -68,6 +68,8 @@ class Transcriber:
 
         # Keyboard controller for auto-paste
         self.keyboard = Controller()
+        self.last_auto_paste_success = None
+        self.last_auto_paste_error = ""
 
         self.reload_personal_dictionary(log_on_success=False)
 
@@ -1108,7 +1110,10 @@ class Transcriber:
 
             # Auto-paste if enabled
             if self.auto_paste:
-                self._auto_paste()
+                self.last_auto_paste_success = self._auto_paste()
+            else:
+                self.last_auto_paste_success = None
+                self.last_auto_paste_error = ""
 
         if self.output_format in ['stdout', 'both']:
             print(f"[Transcription] {text}")
@@ -1153,22 +1158,25 @@ class Transcriber:
 
     def _auto_paste(self):
         """Automatically paste clipboard contents by simulating Cmd+V."""
+        self.last_auto_paste_success = None
+        self.last_auto_paste_error = ""
         # Small delay to ensure clipboard is ready
         time.sleep(0.15)
 
         if sys.platform == 'darwin':
             if self._auto_paste_macos_quartz():
                 print("[Auto-paste] Pasted to active window")
-                return
+                return True
             if self._auto_paste_macos_applescript():
                 print("[Auto-paste] Pasted to active window")
-                return
-            print(
+                return True
+            self.last_auto_paste_error = (
                 "Auto-paste failed. Enable Bloviate in Privacy & Security > Accessibility. "
                 "If macOS lists Python instead of Bloviate, enable Python too. "
                 "For AppleScript fallback, allow Bloviate to control System Events under Automation."
             )
-            return
+            print(self.last_auto_paste_error)
+            return False
 
         try:
             if sys.platform != 'darwin':
@@ -1176,8 +1184,11 @@ class Transcriber:
                 with self.keyboard.pressed(Key.ctrl):
                     self.keyboard.press('v')
                     self.keyboard.release('v')
+                return True
         except Exception as e:
-            print(f"Error auto-pasting: {e}")
+            self.last_auto_paste_error = f"Error auto-pasting: {e}"
+            print(self.last_auto_paste_error)
+        return False
 
     def _auto_paste_macos_quartz(self) -> bool:
         """Paste via CoreGraphics keyboard events to avoid AppleScript Automation prompts."""
