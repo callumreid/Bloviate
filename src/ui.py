@@ -716,10 +716,11 @@ class BottomOverlayIndicator(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
 
         has_message = bool(self._message_text)
-        background = QColor(self.waveform_palette.get("background", "#FFFDF7"))
-        background.setAlpha(236 if has_message else 196)
-        painter.setBrush(background)
-        painter.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
+        if has_message:
+            background = QColor(self.waveform_palette.get("background", "#FFFDF7"))
+            background.setAlpha(236)
+            painter.setBrush(background)
+            painter.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
 
         level = max(0.0, min(self.audio_level, 1.0))
         meter_w = self._SIZE
