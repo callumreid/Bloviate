@@ -1551,11 +1551,9 @@ class BloviateUI(QMainWindow):
         insights_title.setObjectName("InsightSectionTitle")
         self.insights_status_label = QLabel("")
         self.insights_status_label.setStyleSheet(self._settings_status_default_style)
-        self.refresh_insights_button = QPushButton("Refresh")
         insights_header.addWidget(insights_title)
         insights_header.addStretch()
         insights_header.addWidget(self.insights_status_label)
-        insights_header.addWidget(self.refresh_insights_button)
         insights_layout.addLayout(insights_header)
 
         insights_grid = QGridLayout()
@@ -1625,7 +1623,6 @@ class BloviateUI(QMainWindow):
 
         insights_layout.addLayout(insights_grid)
         layout.addWidget(insights_group)
-        self.refresh_insights_button.clicked.connect(self._refresh_insights)
 
         # Achievements
         achievements_group = QGroupBox("Achievements")
@@ -1655,10 +1652,8 @@ class BloviateUI(QMainWindow):
         self.achievement_filter_combo.addItem("Unlocked", "unlocked")
         self.achievement_filter_combo.addItem("Locked", "locked")
         self.achievement_filter_combo.addItem("AI-assisted", "ai")
-        self.refresh_achievements_button = QPushButton("Refresh")
         achievement_filters.addWidget(self.achievement_search_edit, 1)
         achievement_filters.addWidget(self.achievement_filter_combo)
-        achievement_filters.addWidget(self.refresh_achievements_button)
         achievements_layout.addLayout(achievement_filters)
 
         achievement_actions = QHBoxLayout()
@@ -1696,7 +1691,6 @@ class BloviateUI(QMainWindow):
         achievements_layout.addWidget(self.achievement_detail)
         layout.addWidget(achievements_group)
 
-        self.refresh_achievements_button.clicked.connect(self._refresh_achievements)
         self.achievement_search_edit.textChanged.connect(self._queue_achievement_refresh)
         self.achievement_filter_combo.currentIndexChanged.connect(self._queue_achievement_refresh)
         self.achievement_ai_checkbox.stateChanged.connect(self._toggle_achievement_ai)
