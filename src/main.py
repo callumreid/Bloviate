@@ -1094,8 +1094,14 @@ class Bloviate:
     def _show_achievement_unlocks(self, unlocks: list[dict]):
         if not unlocks or not self.ui_window:
             return
-        celebrations = str(self.config.get("achievements", {}).get("celebrations", "full") or "full")
+        celebrations = str(self.config.get("achievements", {}).get("celebrations", "subtle") or "subtle")
         if celebrations == "off":
+            return
+        if celebrations != "full":
+            count = len(unlocks)
+            first_title = str(unlocks[0].get("title", "Achievement unlocked"))
+            message = first_title if count == 1 else f"{count} achievements unlocked"
+            self.ui_window.signals.update_status.emit(message)
             return
         if hasattr(self.ui_window.signals, "show_achievement_unlocks"):
             self.ui_window.signals.show_achievement_unlocks.emit(unlocks)
@@ -2853,9 +2859,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.21</string>
+  <string>0.3.22</string>
   <key>CFBundleVersion</key>
-  <string>0.3.21</string>
+  <string>0.3.22</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>

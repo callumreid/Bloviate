@@ -95,6 +95,24 @@ class MainSettingsTests(unittest.TestCase):
             self.assertIn("2 terms", message)
             self.assertIn("3 rules", message)
 
+    def test_subtle_achievements_do_not_emit_full_overlay(self):
+        app = main.Bloviate.__new__(main.Bloviate)
+        app.config = {"achievements": {"celebrations": "subtle"}}
+        emitted = {"status": [], "overlay": []}
+        app.ui_window = SimpleNamespace(
+            signals=SimpleNamespace(
+                update_status=SimpleNamespace(emit=lambda value: emitted["status"].append(value)),
+                show_achievement_unlocks=SimpleNamespace(
+                    emit=lambda value: emitted["overlay"].append(value)
+                ),
+            )
+        )
+
+        app._show_achievement_unlocks([{"title": "Recovered From The Void"}])
+
+        self.assertEqual(emitted["status"], ["Recovered From The Void"])
+        self.assertEqual(emitted["overlay"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
