@@ -111,6 +111,49 @@ def _save_config(config: dict) -> Path:
     return save_config(config)
 
 
+def _repair_launcher_python_executable():
+    """Point multiprocessing helpers at the real Python, not Bloviate.app.
+
+    The native macOS launcher embeds Python so macOS sees a stable app bundle for
+    permissions. Some dependencies use multiprocessing resource-tracker helpers,
+    which relaunch ``sys.executable`` with Python-internal ``-c`` arguments. If
+    that executable is Bloviate.app, the helper accidentally starts the Bloviate
+    CLI and can leave startup/processing in a bad state.
+    """
+    if os.getenv("BLOVIATE_APP_LAUNCHER") != "1":
+        return
+
+    candidates: list[Path] = []
+    for base in (Path(sys.prefix), Path(sys.exec_prefix)):
+        candidates.extend([base / "bin" / "python3", base / "bin" / "python"])
+
+    try:
+        module_path = Path(__file__).resolve()
+        for parent in module_path.parents:
+            candidates.extend([parent / "bin" / "python3", parent / "bin" / "python"])
+    except Exception:
+        pass
+
+    current = Path(sys.executable).resolve()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved == current or not resolved.is_file():
+            continue
+        if os.access(resolved, os.X_OK):
+            sys.executable = str(resolved)
+            os.environ["PYTHONEXECUTABLE"] = str(resolved)
+            try:
+                import multiprocessing
+
+                multiprocessing.set_executable(str(resolved))
+            except Exception:
+                pass
+            return
+
+
 def _is_verbose_logging_enabled(config: dict) -> bool:
     app_cfg = config.get("app", {})
     return bool(app_cfg.get("verbose_logs", False))
@@ -2873,9 +2916,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.28</string>
+  <string>0.3.29</string>
   <key>CFBundleVersion</key>
-  <string>0.3.28</string>
+  <string>0.3.29</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>
@@ -2924,6 +2967,7 @@ int main(int argc, char **argv) {{
 
 def main():
     """Main entry point."""
+    _repair_launcher_python_executable()
     _load_dotenv()
     parser = argparse.ArgumentParser(description="Bloviate - Voice dictation with fingerprinting")
     parser.add_argument(
