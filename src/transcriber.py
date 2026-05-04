@@ -9,6 +9,7 @@ import ctypes.util
 import io
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -17,6 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import wave
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -1256,10 +1258,6 @@ class Transcriber:
 
     def _auto_paste_macos_python_helper(self) -> bool:
         """Paste from the real Python process when macOS trusts Python but not the app shim."""
-        executable = str(sys.executable or "").strip()
-        if not executable or "Bloviate.app" in executable:
-            return False
-
         helper = r'''
 import ctypes
 import ctypes.util
@@ -1315,30 +1313,71 @@ for keycode, is_down, flags in (
         release(event)
     time.sleep(0.012)
 '''
-        try:
-            env = os.environ.copy()
-            env.pop("BLOVIATE_APP_LAUNCHER", None)
-            result = subprocess.run(
-                [executable, "-c", helper],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=2.0,
-                env=env,
-            )
-            if result.returncode == 0:
-                return True
-            if self.verbose_logs:
-                detail = (result.stderr or result.stdout or "").strip()
-                print(
-                    f"[Auto-paste] Python helper unavailable "
-                    f"({executable}, exit {result.returncode}). {detail}"
+        candidates = self._python_helper_candidates()
+        failures = []
+        if not candidates:
+            print("[Auto-paste] Python helper unavailable: no trusted Python candidate found.")
+            return False
+
+        for executable in candidates:
+            if "Bloviate.app" in executable:
+                continue
+            try:
+                env = os.environ.copy()
+                env.pop("BLOVIATE_APP_LAUNCHER", None)
+                result = subprocess.run(
+                    [executable, "-c", helper],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                    env=env,
                 )
-            return False
-        except Exception as exc:
-            if self.verbose_logs:
-                print(f"[Auto-paste] Python helper error: {exc}")
-            return False
+                if result.returncode == 0:
+                    return True
+                detail = (result.stderr or result.stdout or "").strip()
+                failures.append(f"{executable} -> exit {result.returncode}{': ' + detail if detail else ''}")
+            except Exception as exc:
+                failures.append(f"{executable} -> {exc}")
+
+        if failures:
+            print("[Auto-paste] Python helper failed: " + " | ".join(failures[:4]))
+        return False
+
+    def _python_helper_candidates(self) -> list[str]:
+        candidates = []
+        for value in (
+            getattr(sys, "executable", ""),
+            getattr(sys, "_base_executable", ""),
+            os.environ.get("PYTHONEXECUTABLE", ""),
+            shutil.which("python3.12"),
+            shutil.which("python3"),
+        ):
+            if value:
+                candidates.append(value)
+
+        try:
+            version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+            for base in (sys.prefix, sys.exec_prefix):
+                if base:
+                    candidates.append(str(Path(base) / "bin" / version))
+                    candidates.append(str(Path(base) / "bin" / "python3"))
+        except Exception:
+            pass
+
+        normalized = []
+        seen = set()
+        for candidate in candidates:
+            try:
+                path = Path(str(candidate)).expanduser().resolve()
+            except Exception:
+                continue
+            value = str(path)
+            if value in seen or not path.is_file() or not os.access(path, os.X_OK):
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
 
     def _auto_paste_macos_applescript(self) -> bool:
         """Paste via System Events as a fallback for environments where it is allowed."""
