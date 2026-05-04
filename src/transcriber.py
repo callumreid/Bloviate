@@ -7,6 +7,7 @@ import json
 import ctypes
 import ctypes.util
 import io
+import os
 import re
 import subprocess
 import sys
@@ -21,7 +22,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from pynput.keyboard import Controller, Key
 from command_vocabulary import get_command_prompt_phrases
-from macos_permissions import accessibility_trusted, request_accessibility
+from macos_permissions import accessibility_trusted
 from personal_dictionary import load_personal_dictionary
 from secret_store import SecretStore
 
@@ -1167,6 +1168,9 @@ class Transcriber:
             if self._auto_paste_macos_quartz():
                 print("[Auto-paste] Pasted to active window")
                 return True
+            if self._auto_paste_macos_python_helper():
+                print("[Auto-paste] Pasted to active window")
+                return True
             if self._auto_paste_macos_applescript():
                 print("[Auto-paste] Pasted to active window")
                 return True
@@ -1202,9 +1206,6 @@ class Transcriber:
             core_foundation = ctypes.cdll.LoadLibrary(core_foundation_path)
 
             if not accessibility_trusted():
-                if not self._accessibility_prompt_requested:
-                    self._accessibility_prompt_requested = True
-                    request_accessibility()
                 print(
                     "CoreGraphics auto-paste unavailable: process is not trusted for Accessibility. "
                     "Enable Bloviate in Privacy & Security > Accessibility. "
@@ -1251,6 +1252,92 @@ class Transcriber:
             return True
         except Exception as exc:
             print(f"Error auto-pasting (CoreGraphics): {exc}")
+            return False
+
+    def _auto_paste_macos_python_helper(self) -> bool:
+        """Paste from the real Python process when macOS trusts Python but not the app shim."""
+        executable = str(sys.executable or "").strip()
+        if not executable or "Bloviate.app" in executable:
+            return False
+
+        helper = r'''
+import ctypes
+import ctypes.util
+import sys
+import time
+
+app_services_path = ctypes.util.find_library("ApplicationServices")
+core_foundation_path = ctypes.util.find_library("CoreFoundation")
+if not app_services_path or not core_foundation_path:
+    sys.exit(10)
+
+app_services = ctypes.cdll.LoadLibrary(app_services_path)
+core_foundation = ctypes.cdll.LoadLibrary(core_foundation_path)
+
+app_services.AXIsProcessTrusted.restype = ctypes.c_bool
+if not bool(app_services.AXIsProcessTrusted()):
+    sys.exit(11)
+
+create_event = app_services.CGEventCreateKeyboardEvent
+create_event.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
+create_event.restype = ctypes.c_void_p
+
+set_flags = app_services.CGEventSetFlags
+set_flags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+set_flags.restype = None
+
+post_event = app_services.CGEventPost
+post_event.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+post_event.restype = None
+
+release = core_foundation.CFRelease
+release.argtypes = [ctypes.c_void_p]
+release.restype = None
+
+k_cg_hid_event_tap = 0
+k_vk_ansi_v = 9
+k_vk_command = 55
+command_flag = 0x00100000
+
+for keycode, is_down, flags in (
+    (k_vk_command, True, command_flag),
+    (k_vk_ansi_v, True, command_flag),
+    (k_vk_ansi_v, False, command_flag),
+    (k_vk_command, False, 0),
+):
+    event = create_event(None, keycode, is_down)
+    if not event:
+        sys.exit(12)
+    try:
+        set_flags(event, flags)
+        post_event(k_cg_hid_event_tap, event)
+    finally:
+        release(event)
+    time.sleep(0.012)
+'''
+        try:
+            env = os.environ.copy()
+            env.pop("BLOVIATE_APP_LAUNCHER", None)
+            result = subprocess.run(
+                [executable, "-c", helper],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                env=env,
+            )
+            if result.returncode == 0:
+                return True
+            if self.verbose_logs:
+                detail = (result.stderr or result.stdout or "").strip()
+                print(
+                    f"[Auto-paste] Python helper unavailable "
+                    f"({executable}, exit {result.returncode}). {detail}"
+                )
+            return False
+        except Exception as exc:
+            if self.verbose_logs:
+                print(f"[Auto-paste] Python helper error: {exc}")
             return False
 
     def _auto_paste_macos_applescript(self) -> bool:
