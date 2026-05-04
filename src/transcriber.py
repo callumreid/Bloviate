@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -73,6 +74,7 @@ class Transcriber:
         self.keyboard = Controller()
         self.last_auto_paste_success = None
         self.last_auto_paste_error = ""
+        self._paste_helper_permission_requested = False
 
         self.reload_personal_dictionary(log_on_success=False)
 
@@ -1170,6 +1172,9 @@ class Transcriber:
             if self._auto_paste_macos_quartz():
                 print("[Auto-paste] Pasted to active window")
                 return True
+            if self._auto_paste_macos_native_helper():
+                print("[Auto-paste] Pasted to active window")
+                return True
             if self._auto_paste_macos_python_helper():
                 print("[Auto-paste] Pasted to active window")
                 return True
@@ -1255,6 +1260,129 @@ class Transcriber:
         except Exception as exc:
             print(f"Error auto-pasting (CoreGraphics): {exc}")
             return False
+
+    def _auto_paste_macos_native_helper(self) -> bool:
+        """Paste via the small native helper app installed beside Bloviate."""
+        helper_app = Path.home() / "Applications" / "Bloviate Paste Helper.app"
+        helper = helper_app / "Contents" / "MacOS" / "BloviatePasteHelper"
+        if not helper.is_file() or not os.access(helper, os.X_OK):
+            return False
+
+        direct_code, direct_detail = self._run_native_paste_helper_executable(helper)
+        if direct_code == 0:
+            return True
+
+        app_code, app_detail = self._run_native_paste_helper_app(helper_app)
+        if app_code == 0:
+            return True
+
+        code = app_code if app_code is not None else direct_code
+        detail = app_detail or direct_detail
+        if code == 11:
+            self._request_native_paste_helper_permission(helper_app, helper)
+        elif code is not None:
+            print(
+                "[Auto-paste] Native paste helper failed: "
+                f"exit {code}{': ' + detail if detail else ''}"
+            )
+        return False
+
+    def _run_native_paste_helper_executable(self, helper: Path) -> tuple[Optional[int], str]:
+        try:
+            result = subprocess.run(
+                [str(helper)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+            if result.returncode == 0:
+                return 0, ""
+            return result.returncode, (result.stderr or result.stdout or "").strip()
+        except subprocess.TimeoutExpired:
+            return None, "timed out"
+        except Exception as exc:
+            return None, str(exc)
+
+    def _run_native_paste_helper_app(self, helper_app: Path) -> tuple[Optional[int], str]:
+        open_cmd = shutil.which("open")
+        if not open_cmd:
+            return None, "open command unavailable"
+
+        status_path = Path(tempfile.gettempdir()) / (
+            f"bloviate_paste_helper_{os.getpid()}_{int(time.time() * 1000)}.status"
+        )
+        try:
+            result = subprocess.run(
+                [
+                    open_cmd,
+                    "-gj",
+                    "-n",
+                    "-W",
+                    str(helper_app),
+                    "--args",
+                    "--status-file",
+                    str(status_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+            )
+            detail = (result.stderr or result.stdout or "").strip()
+            if status_path.exists():
+                status_value = status_path.read_text(encoding="utf-8", errors="ignore").strip()
+                try:
+                    return int(status_value), detail
+                except ValueError:
+                    return None, detail or f"invalid helper status: {status_value}"
+            return (0 if result.returncode == 0 else result.returncode), detail
+        except subprocess.TimeoutExpired:
+            return None, "LaunchServices helper timed out"
+        except Exception as exc:
+            return None, str(exc)
+        finally:
+            try:
+                status_path.unlink()
+            except OSError:
+                pass
+
+    def _request_native_paste_helper_permission(self, helper_app: Path, helper: Path) -> None:
+        if self._paste_helper_permission_requested:
+            print(
+                "[Auto-paste] Native paste helper is still not trusted for Accessibility. "
+                "Enable 'Bloviate Paste Helper' in Privacy & Security > Accessibility."
+            )
+            return
+
+        self._paste_helper_permission_requested = True
+        open_cmd = shutil.which("open")
+        try:
+            if open_cmd:
+                subprocess.Popen(
+                    [
+                        open_cmd,
+                        "-gj",
+                        "-n",
+                        str(helper_app),
+                        "--args",
+                        "--request-permission",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                subprocess.Popen(
+                    [str(helper), "--request-permission"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        except Exception:
+            pass
+        print(
+            "[Auto-paste] Native paste helper needs Accessibility. "
+            "Enable 'Bloviate Paste Helper' in Privacy & Security > Accessibility."
+        )
 
     def _auto_paste_macos_python_helper(self) -> bool:
         """Paste from the real Python process when macOS trusts Python but not the app shim."""

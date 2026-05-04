@@ -2645,6 +2645,7 @@ def install_macos_launcher() -> int:
         command_path = (Path.cwd() / command_path).resolve()
 
     app_dir = Path.home() / "Applications" / "Bloviate.app"
+    paste_helper_app_dir = Path.home() / "Applications" / "Bloviate Paste Helper.app"
     contents_dir = app_dir / "Contents"
     macos_dir = contents_dir / "MacOS"
     macos_dir.mkdir(parents=True, exist_ok=True)
@@ -2681,6 +2682,194 @@ def install_macos_launcher() -> int:
         except OSError:
             return False
         return "com.callumreid.bloviate" in text
+
+    def install_paste_helper() -> str:
+        helper_contents_dir = paste_helper_app_dir / "Contents"
+        helper_macos_dir = helper_contents_dir / "MacOS"
+        helper_macos_dir.mkdir(parents=True, exist_ok=True)
+        helper_executable = helper_macos_dir / "BloviatePasteHelper"
+        helper_plist = helper_contents_dir / "Info.plist"
+
+        def existing_helper_is_stable() -> bool:
+            try:
+                data = helper_executable.read_bytes()
+                plist_text = helper_plist.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                return False
+            if data[:4] not in {b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}:
+                return False
+            return (
+                "com.callumreid.bloviate.pastehelper" in plist_text
+                and "0.3.33" in plist_text
+            )
+
+        if existing_helper_is_stable():
+            return f"existing paste helper kept at {paste_helper_app_dir}"
+
+        cc = shutil.which("cc") or shutil.which("clang")
+        if not cc:
+            return "paste helper not installed: native compiler not found"
+
+        source = helper_macos_dir / "BloviatePasteHelper.c"
+        source.write_text(
+            """
+#include <ApplicationServices/ApplicationServices.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+static const char *status_file = NULL;
+
+static int finish(int code) {
+    if (status_file) {
+        FILE *file = fopen(status_file, "w");
+        if (file) {
+            fprintf(file, "%d", code);
+            fclose(file);
+        }
+    }
+    return code;
+}
+
+static bool trusted_with_prompt(void) {
+    const void *keys[] = { kAXTrustedCheckOptionPrompt };
+    const void *values[] = { kCFBooleanTrue };
+    CFDictionaryRef options = CFDictionaryCreate(
+        kCFAllocatorDefault,
+        keys,
+        values,
+        1,
+        &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks
+    );
+    if (!options) return AXIsProcessTrusted();
+    bool trusted = AXIsProcessTrustedWithOptions(options);
+    CFRelease(options);
+    return trusted;
+}
+
+static bool post_key(CGKeyCode key, bool down, CGEventFlags flags) {
+    CGEventRef event = CGEventCreateKeyboardEvent(NULL, key, down);
+    if (!event) return false;
+    CGEventSetFlags(event, flags);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+    usleep(12000);
+    return true;
+}
+
+int main(int argc, char **argv) {
+    bool request_permission = false;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--request-permission") == 0) {
+            request_permission = true;
+        } else if (strcmp(argv[i], "--status-file") == 0 && i + 1 < argc) {
+            status_file = argv[i + 1];
+            i++;
+        }
+    }
+
+    if (request_permission) {
+        if (!trusted_with_prompt()) return finish(11);
+        return finish(0);
+    }
+
+    if (!AXIsProcessTrusted()) return finish(11);
+
+    usleep(150000);
+    const CGKeyCode key_v = 9;
+    const CGKeyCode key_command = 55;
+    const CGEventFlags command_flag = kCGEventFlagMaskCommand;
+
+    if (!post_key(key_command, true, command_flag)) return finish(12);
+    if (!post_key(key_v, true, command_flag)) return finish(12);
+    if (!post_key(key_v, false, command_flag)) return finish(12);
+    if (!post_key(key_command, false, 0)) return finish(12);
+    return finish(0);
+}
+""",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                cc,
+                str(source),
+                "-o",
+                str(helper_executable),
+                "-framework",
+                "ApplicationServices",
+                "-framework",
+                "CoreFoundation",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return (
+                "paste helper compile failed: "
+                + (result.stderr or result.stdout or "native compile failed").strip()
+            )
+        try:
+            source.unlink()
+        except OSError:
+            pass
+        helper_executable.chmod(0o755)
+        helper_plist.write_text(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>BloviatePasteHelper</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.callumreid.bloviate.pastehelper</string>
+  <key>CFBundleName</key>
+  <string>Bloviate Paste Helper</string>
+  <key>CFBundleDisplayName</key>
+  <string>Bloviate Paste Helper</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.3.33</string>
+  <key>CFBundleVersion</key>
+  <string>0.3.33</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
+""",
+            encoding="utf-8",
+        )
+        (helper_contents_dir / "PkgInfo").write_text("APPL????", encoding="utf-8")
+
+        codesign = shutil.which("codesign")
+        if codesign:
+            sign_result = subprocess.run(
+                [
+                    codesign,
+                    "--force",
+                    "--deep",
+                    "--sign",
+                    "-",
+                    "--identifier",
+                    "com.callumreid.bloviate.pastehelper",
+                    str(paste_helper_app_dir),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if sign_result.returncode != 0:
+                detail = (sign_result.stderr or sign_result.stdout or "codesign failed").strip()
+                return f"paste helper installed but signing failed: {detail}"
+
+        return f"paste helper installed at {paste_helper_app_dir}"
 
     def write_shell_launcher(reason: str):
         launch_script = f"""#!/bin/zsh
@@ -2916,9 +3105,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.31</string>
+  <string>0.3.33</string>
   <key>CFBundleVersion</key>
-  <string>0.3.31</string>
+  <string>0.3.33</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>
@@ -2956,7 +3145,10 @@ int main(int argc, char **argv) {{
             detail = (result.stderr or result.stdout or "codesign failed").strip()
             codesign_message = f"Ad-hoc signing failed: {detail}"
 
+    paste_helper_message = install_paste_helper()
+
     print(f"Installed launcher: {app_dir}")
+    print(paste_helper_message)
     print(f"Target command: {command_path}")
     print(f"Launcher mode: {native_message}")
     if codesign_message:
