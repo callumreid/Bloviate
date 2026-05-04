@@ -1048,6 +1048,7 @@ class Bloviate:
     def _cleanup_mode_label(self, mode: str) -> str:
         labels = {
             "verbatim": "Verbatim",
+            "tidy": "Tidy",
             "clean": "Clean",
             "coding": "Coding",
             "message": "Message",
@@ -3105,9 +3106,9 @@ int main(int argc, char **argv) {{
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.33</string>
+  <string>0.3.34</string>
   <key>CFBundleVersion</key>
-  <string>0.3.33</string>
+  <string>0.3.34</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSMicrophoneUsageDescription</key>

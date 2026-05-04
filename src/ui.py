@@ -2034,17 +2034,18 @@ class BloviateUI(QMainWindow):
         self.post_processing_mode_combo = QComboBox()
         cleanup_labels = {
             "verbatim": "Verbatim",
+            "tidy": "Tidy",
             "clean": "Clean prose",
             "coding": "Coding",
             "message": "Message",
         }
-        for value in self._model_options().get("post_processing_modes", ["verbatim", "clean", "coding", "message"]):
+        for value in self._model_options().get("post_processing_modes", ["verbatim", "tidy", "clean", "coding", "message"]):
             self.post_processing_mode_combo.addItem(cleanup_labels.get(value, value.title()), value)
         self._set_combo_data(self.post_processing_mode_combo, pp_cfg.get("mode", "verbatim"))
         self.post_processing_mode_combo.setToolTip(
-            "Verbatim keeps model output as-is. Clean removes filler and normalizes prose. "
-            "Coding keeps code-like dictated text less rewritten. Message is concise prose, "
-            "and is most useful with OpenAI cleanup enabled."
+            "Verbatim keeps model output as-is. Tidy fixes repeated words and punctuation with minimal edits. "
+            "Clean removes filler and normalizes prose. Coding keeps code-like dictated text less rewritten. "
+            "Message is concise prose and is most useful with OpenAI cleanup enabled."
         )
         self.openai_cleanup_checkbox = QCheckBox("Use OpenAI cleanup when available")
         self.openai_cleanup_checkbox.setChecked(bool(pp_cfg.get("openai_enabled", True)))

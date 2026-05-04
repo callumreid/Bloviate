@@ -207,6 +207,38 @@ class ProductionServiceTests(unittest.TestCase):
         self.assertEqual(result.provider, "deterministic")
         self.assertTrue(result.changed)
 
+    def test_post_processor_tidy_removes_repeats_without_filler_rewrite(self):
+        processor = PostProcessor({"post_processing": {"mode": "tidy", "openai_enabled": True}})
+        with mock.patch.object(processor.secret_store, "get_api_key", return_value=None):
+            result = processor.process("um i i really really like Bloviate", mode="tidy")
+
+        self.assertEqual(result.text, "Um I really like Bloviate.")
+        self.assertEqual(result.provider, "deterministic")
+        self.assertTrue(result.changed)
+
+    def test_model_registry_includes_tidy_cleanup_mode(self):
+        self.assertEqual(
+            ModelRegistry.POST_PROCESSING_MODES,
+            ["verbatim", "tidy", "clean", "coding", "message"],
+        )
+
+    def test_post_processor_dictionary_context_summarizes_user_dictionary(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config = {
+                "__config_dir__": tempdir,
+                "transcription": {"personal_dictionary_path": "personal_dictionary.yaml"},
+            }
+            save_personal_dictionary(
+                config,
+                ["Bloviate"],
+                [{"phrase": "Deepgram", "variations": ["deep gram"], "match": "substring"}],
+            )
+
+            context = PostProcessor(config)._dictionary_context()
+
+        self.assertIn("Preferred terms: Bloviate", context)
+        self.assertIn("deep gram -> Deepgram", context)
+
 
 if __name__ == "__main__":
     unittest.main()

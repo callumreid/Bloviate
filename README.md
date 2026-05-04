@@ -128,6 +128,7 @@ Older repo-local `custom_dictionary.yaml`, `personal_dictionary.yaml`, and `lear
 ## Cleanup Modes
 
 - Verbatim: keeps the transcription as returned by the speech model.
+- Tidy: fixes repeated adjacent words, spacing, punctuation, and sentence casing while preserving your wording.
 - Clean prose: removes common filler and normalizes sentences.
 - Coding: avoids prose rewrites that would damage commands, filenames, or identifiers.
 - Message: formats dictated text like a concise message; it differs most when OpenAI cleanup is enabled.

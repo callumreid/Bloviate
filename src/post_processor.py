@@ -14,6 +14,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
+from personal_dictionary import load_personal_dictionary
 from secret_store import SecretStore
 
 
@@ -43,7 +44,7 @@ class PostProcessor:
         original = str(text or "").strip()
         cfg = self.config.get("post_processing", {})
         configured_mode = str(mode or cfg.get("mode", "verbatim") or "verbatim").strip().lower()
-        if configured_mode not in {"verbatim", "clean", "coding", "message"}:
+        if configured_mode not in {"verbatim", "tidy", "clean", "coding", "message"}:
             configured_mode = "verbatim"
 
         deterministic = self._deterministic_cleanup(original, configured_mode)
@@ -69,17 +70,40 @@ class PostProcessor:
 
         cleaned = " ".join(text.split())
         cleaned = re.sub(r"\s+([,.!?;:])", r"\1", cleaned)
+        cleaned = self._remove_adjacent_repeats(cleaned)
 
         if mode in {"clean", "message"}:
             cleaned = FILLER_PATTERN.sub("", cleaned)
             cleaned = " ".join(cleaned.split())
 
         if mode != "coding":
+            cleaned = re.sub(r"\bi\b", "I", cleaned)
             cleaned = self._capitalize_sentence(cleaned)
             if cleaned and cleaned[-1] not in ".!?":
                 cleaned += "."
 
         return cleaned.strip()
+
+    @staticmethod
+    def _remove_adjacent_repeats(text: str) -> str:
+        """Remove obvious immediate duplicate words without broader rewriting."""
+        if not text:
+            return text
+
+        # Keep this intentionally conservative: only adjacent identical words
+        # are removed, preserving punctuation/casing from the first occurrence.
+        pattern = re.compile(
+            r"\b(?P<word>[\w'-]+)(?P<punct>[,.!?;:]?)\s+(?P=word)\b",
+            re.IGNORECASE,
+        )
+        previous = None
+        cleaned = text
+        for _ in range(6):
+            if cleaned == previous:
+                break
+            previous = cleaned
+            cleaned = pattern.sub(r"\g<word>\g<punct>", cleaned)
+        return cleaned
 
     @staticmethod
     def _capitalize_sentence(text: str) -> str:
@@ -99,11 +123,17 @@ class PostProcessor:
         model = str(cfg.get("openai_model", "gpt-4o") or "gpt-4o").strip()
         base_url = str(self.config.get("openai", {}).get("base_url", "https://api.openai.com/v1")).rstrip("/")
         timeout_s = float(cfg.get("timeout_s", 12))
+        dictionary_context = self._dictionary_context()
         system = (
             "You clean up dictated text. Preserve meaning, names, identifiers, commands, "
-            "and code-like tokens. Return only the final text."
+            "code-like tokens, and user dictionary terms/casing. Return only the final text."
         )
         mode_guidance = {
+            "tidy": (
+                "Make only minimal cleanup edits: remove repeated adjacent words, fix spacing, "
+                "obvious punctuation, and sentence casing. Do not summarize, shorten, "
+                "rephrase, or make it sound more polished."
+            ),
             "clean": "Make it polished prose. Remove filler words and obvious false starts.",
             "coding": "Preserve symbols, identifiers, shell commands, filenames, and code-like casing.",
             "message": "Make it read like a concise sent message while preserving the user's intent.",
@@ -112,6 +142,7 @@ class PostProcessor:
             f"Mode: {mode}\n"
             f"Target app: {target_app or 'unknown'}\n"
             f"Guidance: {mode_guidance}\n"
+            f"Dictionary context: {dictionary_context or 'none'}\n"
             "Clean this transcript without adding new ideas:\n"
             f"{text}"
         )
@@ -152,3 +183,33 @@ class PostProcessor:
         except Exception as exc:
             print(f"[Post-processing] OpenAI cleanup unavailable: {exc}")
             return None
+
+    def _dictionary_context(self) -> str:
+        try:
+            payload = load_personal_dictionary(self.config)
+        except Exception:
+            return ""
+
+        parts = []
+        terms = [
+            str(term).strip()
+            for term in payload.get("preferred_terms", [])
+            if str(term).strip()
+        ][:24]
+        if terms:
+            parts.append("Preferred terms: " + ", ".join(terms))
+
+        corrections = []
+        for entry in payload.get("corrections", [])[:16]:
+            phrase = str(entry.get("phrase", "")).strip()
+            variations = [
+                str(item).strip()
+                for item in entry.get("variations", [])
+                if str(item).strip()
+            ][:3]
+            if phrase and variations:
+                corrections.append(f"{'/'.join(variations)} -> {phrase}")
+        if corrections:
+            parts.append("Corrections: " + "; ".join(corrections))
+
+        return " | ".join(parts)

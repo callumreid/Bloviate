@@ -58,7 +58,7 @@ class ModelRegistry:
     ]
 
     FINAL_PASS_MODES = ["hybrid", "prerecorded", "streaming"]
-    POST_PROCESSING_MODES = ["verbatim", "clean", "coding", "message"]
+    POST_PROCESSING_MODES = ["verbatim", "tidy", "clean", "coding", "message"]
     OUTPUT_FORMATS = ["clipboard", "stdout", "both"]
 
     def providers(self) -> list[ProviderOption]:

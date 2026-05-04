@@ -98,7 +98,7 @@ achievements:
 
 # Post-processing / cleanup
 post_processing:
-  mode: "verbatim"  # verbatim, clean, coding, message
+  mode: "verbatim"  # verbatim, tidy, clean, coding, message
   openai_enabled: true  # Use AI cleanup when the mode allows it and an OpenAI key is configured
   openai_model: "gpt-4o"
   timeout_s: 12
