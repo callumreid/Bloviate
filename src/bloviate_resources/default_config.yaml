@@ -70,6 +70,7 @@ transcription:
   whisper_fallback_model: "medium.en"  # Accuracy-first local fallback
   preload_whisper_fallback: false  # Avoid heavy torch/Whisper CPU work during app startup
   final_pass: "hybrid"  # hybrid=streaming interim + prerecorded final for best accuracy
+  hybrid_stream_fallback_min_rms: 0.0  # Raise for quiet mics to avoid pasting weak streaming fragments
   initial_prompt: ""  # Optional base prompt applied to OpenAI + Whisper transcriptions
   include_command_vocabulary: true  # Bias command-mode transcription toward built-in voice commands
   prompt_max_terms: 40  # Keep automatic prompting concise so it helps more than it over-biases
@@ -145,6 +146,7 @@ deepgram:
   prerecorded_max_gain_db: 45.0
   prerecorded_min_gain_db: -8.0
   prerecorded_peak_ceiling: 0.95
+  prerecorded_min_confidence: null  # Set e.g. 0.35 to reject weak final-pass transcripts
   keyterm:
     - "bash"
     - "Claude"
@@ -160,6 +162,14 @@ openai:
   response_format: "json"
   temperature: 0
   prompt: ""
+  normalize_audio: true  # Boost quiet final-pass audio before sending it to OpenAI STT
+  target_rms: 0.05
+  noise_floor_rms: 0.0000005
+  max_gain_db: 48.0
+  min_gain_db: -8.0
+  peak_ceiling: 0.95
+  min_transcribe_rms: 0.00008  # Skip near-silent clips instead of letting STT hallucinate
+  prompt_min_rms: 0.0015  # Avoid vocabulary over-bias on ultra-quiet clips
 
 # UI
 ui:

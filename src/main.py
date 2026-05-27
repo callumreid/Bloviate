@@ -2171,17 +2171,32 @@ class Bloviate:
             return text, provider_used
 
         text = None
-        final_text, provider_used = self.transcriber.transcribe_with_priority(
+        final_text, final_provider_used = self.transcriber.transcribe_with_priority(
             audio_for_transcription, final_provider_order, mode="dictation"
         )
         if final_text:
             text = final_text
-            if provider_used:
-                print(f"[Final] Used provider: {provider_used}")
+            provider_used = final_provider_used or provider_used
+            if final_provider_used:
+                print(f"[Final] Used provider: {final_provider_used}")
             if final_pass_mode == "hybrid" and stream_text and stream_text != final_text:
                 print("[Final] Using higher-accuracy final pass instead of streaming text")
         elif final_pass_mode == "hybrid":
-            text = stream_text
+            stream_fallback_min_rms = float(
+                transcription_cfg.get("hybrid_stream_fallback_min_rms", 0.0) or 0.0
+            )
+            audio_rms = (
+                float(np.sqrt(np.mean(audio_for_transcription.astype(np.float32) ** 2)))
+                if audio_for_transcription.size
+                else 0.0
+            )
+            if stream_text and audio_rms >= stream_fallback_min_rms:
+                text = stream_text
+            elif stream_text:
+                print(
+                    "[Final] Ignoring streaming fallback: "
+                    f"clip RMS {audio_rms:.5f} below {stream_fallback_min_rms:.5f}"
+                )
         return text, provider_used
 
     def process_command_recording(self, recorded_chunks=None):

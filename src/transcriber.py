@@ -775,14 +775,41 @@ class Transcriber:
 
     def _normalize_audio_for_int16(self, audio: np.ndarray) -> np.ndarray:
         """Apply capped RMS normalization before int16 conversion."""
-        rms = float(np.sqrt(np.mean(audio ** 2)))
         noise_floor_rms = float(self.deepgram_config.get("prerecorded_noise_floor_rms", 5e-7))
-        if rms <= noise_floor_rms:
-            return audio
-
         target_rms = float(self.deepgram_config.get("prerecorded_target_rms", 0.05))
         max_gain_db = float(self.deepgram_config.get("prerecorded_max_gain_db", 45.0))
         min_gain_db = float(self.deepgram_config.get("prerecorded_min_gain_db", -8.0))
+        peak_ceiling = float(self.deepgram_config.get("prerecorded_peak_ceiling", 0.95))
+        return self._normalize_audio_rms(
+            audio,
+            target_rms=target_rms,
+            noise_floor_rms=noise_floor_rms,
+            max_gain_db=max_gain_db,
+            min_gain_db=min_gain_db,
+            peak_ceiling=peak_ceiling,
+        )
+
+    @staticmethod
+    def _audio_rms(audio: np.ndarray) -> float:
+        if audio.size == 0:
+            return 0.0
+        return float(np.sqrt(np.mean(audio.astype(np.float32) ** 2)))
+
+    @classmethod
+    def _normalize_audio_rms(
+        cls,
+        audio: np.ndarray,
+        *,
+        target_rms: float,
+        noise_floor_rms: float,
+        max_gain_db: float,
+        min_gain_db: float,
+        peak_ceiling: float,
+    ) -> np.ndarray:
+        rms = cls._audio_rms(audio)
+        if rms <= noise_floor_rms:
+            return audio
+
         max_gain = float(10 ** (max_gain_db / 20.0))
         min_gain = float(10 ** (min_gain_db / 20.0))
 
@@ -790,12 +817,24 @@ class Transcriber:
         gain = min(max(gain, min_gain), max_gain)
         normalized = audio * gain
 
-        peak_ceiling = float(self.deepgram_config.get("prerecorded_peak_ceiling", 0.95))
         peak = float(np.max(np.abs(normalized)))
         if peak > peak_ceiling > 0:
             normalized = normalized * (peak_ceiling / peak)
 
-        return normalized
+        return normalized.astype(np.float32, copy=False)
+
+    def _normalize_openai_audio(self, audio: np.ndarray) -> np.ndarray:
+        """Apply capped RMS normalization before OpenAI STT."""
+        if not bool(self.openai_config.get("normalize_audio", True)):
+            return audio
+        return self._normalize_audio_rms(
+            audio,
+            target_rms=float(self.openai_config.get("target_rms", 0.05)),
+            noise_floor_rms=float(self.openai_config.get("noise_floor_rms", 5e-7)),
+            max_gain_db=float(self.openai_config.get("max_gain_db", 48.0)),
+            min_gain_db=float(self.openai_config.get("min_gain_db", -8.0)),
+            peak_ceiling=float(self.openai_config.get("peak_ceiling", 0.95)),
+        )
 
     def _get_openai_api_key(self) -> Optional[str]:
         return self.secret_store.get_api_key("openai", self.config)
@@ -945,14 +984,30 @@ class Transcriber:
         if not model:
             model = "gpt-4o-transcribe"
 
-        wav_bytes = self._audio_to_wav_bytes(audio)
+        if len(audio.shape) > 1:
+            audio = audio.squeeze()
+        if audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+
+        rms = self._audio_rms(audio)
+        min_transcribe_rms = float(self.openai_config.get("min_transcribe_rms", 0.00008))
+        if 0 <= rms < min_transcribe_rms:
+            print(
+                "[OpenAI] Skipping transcription: "
+                f"clip RMS {rms:.5f} below {min_transcribe_rms:.5f}"
+            )
+            return None
+
+        normalized_audio = self._normalize_openai_audio(audio)
+        wav_bytes = self._audio_to_wav_bytes(normalized_audio)
         fields = {
             "model": model,
             "language": self.language,
         }
 
         prompt = self._compose_prompt("openai", mode=mode)
-        if prompt:
+        prompt_min_rms = float(self.openai_config.get("prompt_min_rms", 0.0015))
+        if prompt and rms >= prompt_min_rms:
             fields["prompt"] = prompt
 
         temperature = self.openai_config.get("temperature")
@@ -1072,9 +1127,29 @@ class Transcriber:
                 print("[Deepgram] Prerecorded returned no alternatives")
                 return None
             text = alternatives[0].get("transcript", "").strip()
+            confidence = alternatives[0].get("confidence")
             if not text:
-                print(f"[Deepgram] Prerecorded returned empty transcript (confidence={alternatives[0].get('confidence', '?')})")
+                confidence_label = confidence if confidence is not None else "?"
+                print(f"[Deepgram] Prerecorded returned empty transcript (confidence={confidence_label})")
                 return None
+            min_confidence = self.deepgram_config.get("prerecorded_min_confidence")
+            if min_confidence is not None:
+                try:
+                    min_confidence_value = float(min_confidence)
+                    confidence_value = float(confidence)
+                except (TypeError, ValueError):
+                    confidence_value = None
+                    min_confidence_value = None
+                if (
+                    confidence_value is not None
+                    and min_confidence_value is not None
+                    and confidence_value < min_confidence_value
+                ):
+                    print(
+                        "[Deepgram] Prerecorded transcript below confidence threshold "
+                        f"({confidence_value:.2f} < {min_confidence_value:.2f})"
+                    )
+                    return None
             if self.use_custom_dictionary:
                 text = self._apply_custom_dictionary(text)
             return text
