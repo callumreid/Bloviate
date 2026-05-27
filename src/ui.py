@@ -90,12 +90,12 @@ def mic_sensitivity_settings(value) -> dict[str, object]:
 
     return {
         "noise_suppression.mic_sensitivity": sensitivity,
-        "noise_suppression.stationary_noise_reduction": round(0.75 - 0.35 * t, 2),
+        "noise_suppression.stationary_noise_reduction": round(max(0.15, 0.75 - 0.60 * t), 2),
         "noise_suppression.vad_aggressiveness": vad_aggressiveness,
-        "noise_suppression.speech_min_rms": log_interp(0.003, 0.00004),
+        "noise_suppression.speech_min_rms": log_interp(0.003, 0.00001),
         "noise_suppression.speech_min_frames": min_frames,
         "noise_suppression.speech_min_ratio": round(0.12 - 0.115 * t, 4),
-        "noise_suppression.speech_energy_fallback_rms": log_interp(0.0012, 0.00004),
+        "noise_suppression.speech_energy_fallback_rms": log_interp(0.0012, 0.00001),
     }
 
 
@@ -105,10 +105,10 @@ def mic_sensitivity_from_config(noise_config: dict) -> int:
     if "mic_sensitivity" in noise_config:
         return _clamp_mic_sensitivity(noise_config.get("mic_sensitivity"))
     try:
-        rms = max(0.00004, min(float(noise_config.get("speech_min_rms", 0.003)), 0.003))
+        rms = max(0.00001, min(float(noise_config.get("speech_min_rms", 0.003)), 0.003))
     except (TypeError, ValueError):
         return 50
-    t = math.log(rms / 0.003) / math.log(0.00004 / 0.003)
+    t = math.log(rms / 0.003) / math.log(0.00001 / 0.003)
     return _clamp_mic_sensitivity(t * 100)
 
 

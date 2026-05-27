@@ -70,6 +70,27 @@ class NoiseSuppressorSpeechGateTests(unittest.TestCase):
 
         self.assertTrue(NoiseSuppressor.has_speech(suppressor, []))
 
+    def test_has_speech_accepts_vad_frames_below_rms_gate(self):
+        suppressor = NoiseSuppressor.__new__(NoiseSuppressor)
+        suppressor.config = {
+            "noise_suppression": {
+                "mic_sensitivity": 100,
+                "speech_min_rms": 0.00005,
+                "speech_min_frames": 1,
+                "speech_min_ratio": 0.01,
+                "speech_energy_fallback_rms": 0.000047,
+            }
+        }
+
+        suppressor.speech_stats = lambda audio: {
+            "rms": 0.00004,
+            "frames": 128,
+            "speech_frames": 10,
+            "speech_ratio": 0.078,
+        }
+
+        self.assertTrue(NoiseSuppressor.has_speech(suppressor, []))
+
 
 if __name__ == "__main__":
     unittest.main()

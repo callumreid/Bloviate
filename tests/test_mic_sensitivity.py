@@ -22,7 +22,8 @@ class MicSensitivityTests(unittest.TestCase):
         )
         self.assertEqual(quiet["noise_suppression.vad_aggressiveness"], 0)
         self.assertEqual(quiet["noise_suppression.speech_min_frames"], 1)
-        self.assertLessEqual(quiet["noise_suppression.speech_energy_fallback_rms"], 0.0001)
+        self.assertLessEqual(quiet["noise_suppression.speech_energy_fallback_rms"], 0.00003)
+        self.assertLessEqual(quiet["noise_suppression.stationary_noise_reduction"], 0.2)
 
     def test_sensitivity_clamps_to_valid_range(self):
         self.assertEqual(mic_sensitivity_settings(200)["noise_suppression.mic_sensitivity"], 100)
@@ -31,7 +32,7 @@ class MicSensitivityTests(unittest.TestCase):
     def test_infers_sensitivity_from_existing_config(self):
         self.assertGreaterEqual(
             mic_sensitivity_from_config({"speech_min_rms": 0.00005}),
-            90,
+            70,
         )
         self.assertEqual(mic_sensitivity_from_config({"mic_sensitivity": 85}), 85)
 
