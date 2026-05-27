@@ -16,6 +16,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QS
 from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter, QPen, QCursor
 from datetime import date, timedelta
 from html import escape
+import math
 import sys
 import time
 import numpy as np
@@ -40,6 +41,20 @@ def permission_status_requires_prompt(status: dict) -> bool:
     """Return true only for permission states known to need user action."""
     state = str((status or {}).get("state", "") or "").strip().lower()
     return state in PERMISSION_PROMPT_STATES
+
+
+def normalize_audio_level_for_meter(raw_level: float) -> float:
+    """Map raw RMS into a perceptual meter value so quiet mics still move."""
+    try:
+        level = max(0.0, float(raw_level or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+    noise_floor = 0.00025
+    speech_ceiling = 0.035
+    if level <= noise_floor:
+        return 0.0
+    normalized = math.log10(level / noise_floor) / math.log10(speech_ceiling / noise_floor)
+    return max(0.0, min(normalized, 1.0))
 
 
 class UISignals(QObject):
@@ -764,21 +779,29 @@ class BottomOverlayIndicator(QWidget):
 class AudioLevelMeter(QWidget):
     """Smoothed equalizer-style audio meter for the status page."""
 
-    _BAR_COUNT = 14
-    _GAP = 5
-    _MARGIN = 8
-    _PROFILE = [0.25, 0.42, 0.66, 0.88, 0.58, 0.36, 0.74, 0.96, 0.72, 0.44, 0.62, 0.82, 0.48, 0.3]
-    _MIN_BAR_HEIGHT = 0.10
+    _BAR_COUNT = 72
+    _GAP = 3
+    _MARGIN_X = 14
+    _MARGIN_Y = 10
+    _PROFILE = [
+        0.42, 0.58, 0.74, 0.91, 0.63, 0.49, 0.81, 1.0, 0.69, 0.53, 0.77, 0.88,
+        0.46, 0.61, 0.84, 0.72, 0.55, 0.95,
+    ]
+    _MIN_BAR_HEIGHT = 0.05
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.waveform_palette = waveform_palette_for_config({})
         self._target_level = 0.0
         self._display_level = 0.0
+        self._levels = [0.0] * self._BAR_COUNT
+        self._peak_level = 0.0
+        self._last_sample_at = 0.0
         self._timer = QTimer(self)
-        self._timer.setInterval(50)
+        self._timer.setInterval(33)
         self._timer.timeout.connect(self._animate)
-        self.setMinimumHeight(46)
+        self.setMinimumHeight(76)
+        self.setMaximumHeight(96)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def set_waveform_palette(self, palette: dict):
@@ -787,26 +810,62 @@ class AudioLevelMeter(QWidget):
 
     def set_audio_level(self, level: float):
         next_level = max(0.0, min(float(level or 0.0), 1.0))
+        self._push_level(next_level)
         if not self.isVisible():
             self._target_level = next_level
             self._display_level = next_level
             self._timer.stop()
             return
-        if abs(next_level - self._target_level) < 0.015 and self._timer.isActive():
+        if abs(next_level - self._target_level) < 0.004 and self._timer.isActive():
             return
         self._target_level = next_level
         if not self._timer.isActive():
             self._timer.start()
 
+    def _push_level(self, level: float):
+        self._levels = self._levels[1:] + [level]
+        self._peak_level = max(self._peak_level, level)
+        self._last_sample_at = time.monotonic()
+
     def _animate(self):
         delta = self._target_level - self._display_level
-        if abs(delta) < 0.004:
+        if abs(delta) < 0.003:
             self._display_level = self._target_level
-            if self._target_level <= 0.004:
-                self._timer.stop()
         else:
-            self._display_level += delta * 0.18
+            self._display_level += delta * 0.28
+        if time.monotonic() - self._last_sample_at > 0.12:
+            self._levels = self._levels[1:] + [self._display_level * 0.72]
+        self._peak_level = max(self._display_level, self._peak_level - 0.018)
+        if self._target_level <= 0.004 and self._display_level <= 0.004 and max(self._levels) <= 0.004:
+            self._timer.stop()
         self.update()
+
+    def _bar_color(self, value: float) -> QColor:
+        quiet = QColor(self.waveform_palette.get("quiet", "#BFB2A1"))
+        speech = QColor(self.waveform_palette.get("accepted", "#2D6B6B"))
+        hot = QColor(self.waveform_palette.get("recording", "#E7C873"))
+        value = max(0.0, min(value, 1.0))
+        if value < 0.16:
+            color = QColor(quiet)
+            color.setAlpha(115 + int(80 * value / 0.16))
+            return color
+        if value < 0.72:
+            t = (value - 0.16) / 0.56
+            color = QColor(
+                int(quiet.red() + (speech.red() - quiet.red()) * t),
+                int(quiet.green() + (speech.green() - quiet.green()) * t),
+                int(quiet.blue() + (speech.blue() - quiet.blue()) * t),
+            )
+            color.setAlpha(190)
+            return color
+        t = min(1.0, (value - 0.72) / 0.28)
+        color = QColor(
+            int(speech.red() + (hot.red() - speech.red()) * t),
+            int(speech.green() + (hot.green() - speech.green()) * t),
+            int(speech.blue() + (hot.blue() - speech.blue()) * t),
+        )
+        color.setAlpha(220)
+        return color
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -816,24 +875,28 @@ class AudioLevelMeter(QWidget):
         painter.setBrush(QColor(self.waveform_palette.get("background", "#FFFDF7")))
         painter.drawRoundedRect(0, 0, self.width(), self.height(), 8, 8)
 
-        level = max(0.0, min(self._display_level, 1.0))
-        usable_w = max(1, self.width() - self._MARGIN * 2)
-        usable_h = max(1, self.height() - self._MARGIN * 2)
+        usable_w = max(1, self.width() - self._MARGIN_X * 2)
+        usable_h = max(1, self.height() - self._MARGIN_Y * 2)
         bar_w = max(4, int((usable_w - self._GAP * (self._BAR_COUNT - 1)) / self._BAR_COUNT))
         total_w = bar_w * self._BAR_COUNT + self._GAP * (self._BAR_COUNT - 1)
-        start_x = self._MARGIN + max(0, int((usable_w - total_w) / 2))
+        start_x = self._MARGIN_X + max(0, int((usable_w - total_w) / 2))
+        center_y = self.height() / 2
 
-        base_color = QColor(self.waveform_palette.get("accepted", "#2D6B6B"))
-        quiet_color = QColor(self.waveform_palette.get("quiet", "#BFB2A1"))
-        for idx, base in enumerate(self._PROFILE):
-            height_ratio = self._MIN_BAR_HEIGHT + (base - self._MIN_BAR_HEIGHT) * level
+        for idx, level in enumerate(self._levels):
+            base = self._PROFILE[idx % len(self._PROFILE)]
+            shaped_level = min(1.0, level * (0.72 + base * 0.48))
+            height_ratio = self._MIN_BAR_HEIGHT + (1.0 - self._MIN_BAR_HEIGHT) * shaped_level
             h = max(4, int(usable_h * height_ratio))
             x = start_x + idx * (bar_w + self._GAP)
-            y = self._MARGIN + int((usable_h - h) / 2)
-            color = QColor(base_color if level > 0.04 else quiet_color)
-            color.setAlpha(110 + int(120 * min(1.0, level + base * 0.25)))
-            painter.setBrush(color)
-            painter.drawRoundedRect(x, y, bar_w, h, 3, 3)
+            y = int(center_y - h / 2)
+            painter.setBrush(self._bar_color(shaped_level))
+            painter.drawRoundedRect(x, y, bar_w, h, 2, 2)
+
+        if self._peak_level > 0.05:
+            peak_x = start_x + total_w - 2
+            peak_h = max(8, int(usable_h * self._peak_level))
+            painter.setBrush(QColor(self.waveform_palette.get("recording", "#E7C873")))
+            painter.drawRoundedRect(peak_x, int(center_y - peak_h / 2), 2, peak_h, 1, 1)
 
         painter.end()
 
@@ -4144,7 +4207,7 @@ class BloviateUI(QMainWindow):
 
     def _update_audio_level(self, level: float):
         """Update the audio level bar."""
-        normalized_level = max(0.0, min(level / 0.26, 1.0))
+        normalized_level = normalize_audio_level_for_meter(level)
         if (
             hasattr(self, "tabs")
             and hasattr(self, "status_tab")
