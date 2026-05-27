@@ -138,10 +138,13 @@ class NoiseSuppressor:
         min_rms = float(self.config['noise_suppression'].get('speech_min_rms', 0.003))
         min_speech_frames = int(self.config['noise_suppression'].get('speech_min_frames', 3))
         min_speech_ratio = float(self.config['noise_suppression'].get('speech_min_ratio', 0.12))
+        energy_fallback_rms = self.config['noise_suppression'].get('speech_energy_fallback_rms')
 
         if stats["rms"] < min_rms:
             return False
         if stats["speech_frames"] >= min_speech_frames:
+            return True
+        if energy_fallback_rms is not None and stats["rms"] >= float(energy_fallback_rms):
             return True
         return stats["speech_ratio"] >= min_speech_ratio
 

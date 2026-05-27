@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QSignalBlocker, QRectF, QSize
 from PyQt6.QtGui import QPalette, QColor, QFont, QIcon, QPixmap, QPainter, QPen, QCursor
 from datetime import date, timedelta
+from html import escape
 import sys
 import time
 import numpy as np
@@ -1911,6 +1912,15 @@ class BloviateUI(QMainWindow):
         self.voice_profile_label.setStyleSheet(self._settings_status_default_style)
         voice_layout.addWidget(self.voice_profile_label)
 
+        self.voice_sample_prompt_label = QLabel("Next sample: --")
+        self.voice_sample_prompt_label.setTextFormat(Qt.TextFormat.RichText)
+        self.voice_sample_prompt_label.setWordWrap(True)
+        self.voice_sample_prompt_label.setStyleSheet(
+            "font-size: 14px; color: #2B2118; padding: 10px; "
+            "border: 1px solid #D8CEC2; border-radius: 6px; background: #FFF7EA;"
+        )
+        voice_layout.addWidget(self.voice_sample_prompt_label)
+
         profile_actions = QHBoxLayout()
         self.capture_sample_button = QPushButton("Record 3s Sample")
         self.clear_profile_button = QPushButton("Reset Profile")
@@ -2946,6 +2956,7 @@ class BloviateUI(QMainWindow):
             self.capture_sample_button.setEnabled(False)
             self.clear_profile_button.setEnabled(False)
             self.voice_profile_label.setText("Profile: unavailable")
+            self.voice_sample_prompt_label.setText("Next sample: unavailable")
             self.voice_settings_status_label.setText("Voice settings unavailable.")
             self.voice_settings_status_label.setStyleSheet(self._settings_error_style)
             return
@@ -2954,6 +2965,7 @@ class BloviateUI(QMainWindow):
             status = self.get_voice_profile_status() or {}
         except Exception as exc:
             self.voice_profile_label.setText("Profile: error")
+            self.voice_sample_prompt_label.setText("Next sample: error")
             self._set_settings_status(
                 self.voice_settings_status_label,
                 f"Could not load voice settings: {exc}",
@@ -2980,6 +2992,36 @@ class BloviateUI(QMainWindow):
         ready_text = "ready" if ready else "incomplete"
         self.voice_profile_label.setText(
             f"Profile: {enrolled}/{minimum} samples ({ready_text}) • {profile_path}"
+        )
+        phrase = str(status.get("next_sample_phrase", "") or "").strip()
+        sample_number = int(status.get("next_sample_number", enrolled + 1) or (enrolled + 1))
+        self._voice_sample_phrase = phrase
+        self._voice_sample_number = sample_number
+        self._voice_sample_denominator = minimum if not ready else f"{minimum}+"
+        if phrase:
+            self._show_voice_sample_prompt(recording=False)
+        else:
+            self.voice_sample_prompt_label.setText("Next sample: --")
+
+    def _show_voice_sample_prompt(self, *, recording: bool, remaining_s: float | None = None):
+        phrase = str(getattr(self, "_voice_sample_phrase", "") or "").strip()
+        if not phrase:
+            self.voice_sample_prompt_label.setText("Next sample: --")
+            return
+        sample_number = getattr(self, "_voice_sample_number", "?")
+        denominator = getattr(self, "_voice_sample_denominator", "?")
+        phrase_html = escape(phrase)
+        if recording:
+            remaining = 0.0 if remaining_s is None else max(0.0, float(remaining_s))
+            self.voice_sample_prompt_label.setText(
+                "<b>Recording now"
+                f" - {remaining:.1f}s left</b><br>"
+                f"<span style='font-size: 17px;'>Say now: \"{phrase_html}\"</span>"
+            )
+            return
+        self.voice_sample_prompt_label.setText(
+            f"<b>Next sample {sample_number}/{denominator}</b><br>"
+            f"<span style='font-size: 17px;'>Say: \"{phrase_html}\"</span>"
         )
 
     def _apply_voice_mode(self):
@@ -3015,10 +3057,22 @@ class BloviateUI(QMainWindow):
             )
             return
         self.capture_sample_button.setEnabled(False)
-        self._set_settings_status(self.voice_settings_status_label, "Recording sample...", ok=True)
+        self.capture_sample_button.setText("Recording...")
+        self._show_voice_sample_prompt(recording=True, remaining_s=3.0)
+        self._set_settings_status(
+            self.voice_settings_status_label,
+            "Speak until the countdown reaches 0.",
+            ok=True,
+        )
         QApplication.processEvents()
-        ok, message = self.capture_enrollment_sample(3.0)
+        def update_progress(remaining_s, _duration_s):
+            self._show_voice_sample_prompt(recording=True, remaining_s=remaining_s)
+            self.capture_sample_button.setText(f"Recording {max(0.0, float(remaining_s)):.1f}s")
+            QApplication.processEvents()
+
+        ok, message = self.capture_enrollment_sample(3.0, progress_callback=update_progress)
         self.capture_sample_button.setEnabled(True)
+        self.capture_sample_button.setText("Record 3s Sample")
         self._set_settings_status(self.voice_settings_status_label, message, ok=ok)
         self._refresh_voice_controls()
 

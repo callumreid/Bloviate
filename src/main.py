@@ -101,6 +101,25 @@ from secret_store import SecretStore
 from settings_service import SettingsService, load_yaml_config, save_config
 
 
+ENROLLMENT_PHRASES = (
+    "The quick brown fox jumps over the lazy dog",
+    "Bloviate is my voice transcription tool",
+    "I use this every day to capture my thoughts",
+    "Voice recognition works best with consistent samples",
+    "My voice has a unique signature that identifies me",
+    "Speaking clearly helps the model learn my voice",
+    "This is another sample to improve accuracy",
+    "Final enrollment phrase for voice fingerprinting",
+    "The weather today is perfect for working outside",
+    "Artificial intelligence makes transcription effortless",
+)
+
+
+def enrollment_phrase_for_sample(sample_index: int) -> str:
+    """Return the enrollment phrase for a zero-based sample index."""
+    return ENROLLMENT_PHRASES[int(sample_index) % len(ENROLLMENT_PHRASES)]
+
+
 def _load_config(config_path: str, *, allow_missing: bool = False) -> tuple[dict, Path]:
     """Load YAML config relative to the project root."""
     return load_yaml_config(config_path, allow_missing=allow_missing)
@@ -763,6 +782,8 @@ class Bloviate:
         enrolled = len(self.voice_fingerprint.enrolled_embeddings)
         minimum = int(self.voice_fingerprint.min_enrollment_samples)
         mode = "talk" if self.talk_mode else "whisper"
+        next_sample_number = enrolled + 1
+        next_sample_phrase = enrollment_phrase_for_sample(enrolled)
         return {
             "mode": mode,
             "threshold": float(self.voice_fingerprint.threshold),
@@ -770,6 +791,8 @@ class Bloviate:
             "min_samples": minimum,
             "is_enrolled": bool(self.voice_fingerprint.is_enrolled()),
             "profile_path": str(self.voice_fingerprint.profile_path),
+            "next_sample_number": next_sample_number,
+            "next_sample_phrase": next_sample_phrase,
         }
 
     def set_voice_mode(self, mode: str) -> tuple[bool, str]:
@@ -812,7 +835,7 @@ class Bloviate:
             self.voice_fingerprint.save_profile()
         return True, f"Voice threshold set to {clamped:.2f}"
 
-    def capture_enrollment_sample(self, duration_s: float = 3.0) -> tuple[bool, str]:
+    def capture_enrollment_sample(self, duration_s: float = 3.0, progress_callback=None) -> tuple[bool, str]:
         """Capture one sample from live audio and add it to the voice profile."""
         if self.is_recording or self.is_command_recording:
             return False, "Finish dictation before recording enrollment samples."
@@ -833,9 +856,19 @@ class Bloviate:
             samples = []
             deadline = time.time() + capture_seconds
             while time.time() < deadline:
+                if progress_callback:
+                    try:
+                        progress_callback(max(0.0, deadline - time.time()), capture_seconds)
+                    except Exception:
+                        pass
                 chunk = self.audio_capture.get_audio_chunk(timeout=0.12)
                 if chunk is not None:
                     samples.append(chunk)
+            if progress_callback:
+                try:
+                    progress_callback(0.0, capture_seconds)
+                except Exception:
+                    pass
 
             if not samples:
                 return False, "No audio captured. Check your microphone and try again."
@@ -852,7 +885,8 @@ class Bloviate:
             self._evaluate_achievements()
             if self.voice_fingerprint.is_enrolled():
                 return True, f"Captured sample {enrolled}/{minimum} (RMS={rms:.4f}). Profile is ready."
-            return True, f"Captured sample {enrolled}/{minimum} (RMS={rms:.4f})."
+            next_phrase = enrollment_phrase_for_sample(enrolled)
+            return True, f"Captured sample {enrolled}/{minimum} (RMS={rms:.4f}). Next: \"{next_phrase}\""
         finally:
             self.audio_capture.is_listening = False
             self._enrollment_lock.release()
@@ -862,7 +896,13 @@ class Bloviate:
         if self.is_recording or self.is_command_recording:
             return False, "Finish dictation before clearing the profile."
         self.voice_fingerprint.clear_profile()
-        return True, "Voice profile cleared."
+        self.voice_mode = "talk"
+        self.talk_mode = True
+        self.config.setdefault("voice_fingerprint", {})["mode"] = "talk"
+        saved_path = _save_config(self.config)
+        if self.verbose_logs:
+            print(f"[Config] Saved voice_fingerprint.mode=talk to {saved_path}")
+        return True, "Voice profile cleared. Switched to talk mode until you re-enroll."
 
     def get_personal_dictionary_path(self) -> str:
         """Return resolved personal dictionary file path."""
@@ -1497,22 +1537,9 @@ class Bloviate:
         self.audio_capture.start()
         self.audio_capture.is_listening = False
 
-        phrases = [
-            "The quick brown fox jumps over the lazy dog",
-            "Bloviate is my voice transcription tool",
-            "I use this every day to capture my thoughts",
-            "Voice recognition works best with consistent samples",
-            "My voice has a unique signature that identifies me",
-            "Speaking clearly helps the model learn my voice",
-            "This is another sample to improve accuracy",
-            "Final enrollment phrase for voice fingerprinting",
-            "The weather today is perfect for working outside",
-            "Artificial intelligence makes transcription effortless",
-        ]
-
         i = 0
         while i < n:
-            phrase = phrases[i % len(phrases)]
+            phrase = enrollment_phrase_for_sample(i)
             print(f"\nSample {i+1}/{n} — say this phrase:")
             print(f"  \"{phrase}\"")
             input("Press Enter when ready...")
@@ -2481,8 +2508,17 @@ class Bloviate:
         """Run the main application."""
         # Check if voice is enrolled (unless talk mode)
         if not self.talk_mode and not self.voice_fingerprint.is_enrolled():
-            print("Voice not enrolled. Please run with --enroll first.")
-            return
+            has_gui_entrypoint = bool(
+                self.config.get("ui", {}).get("show_main_window", True)
+                or self.config.get("ui", {}).get("show_menubar_indicator", True)
+            )
+            if has_gui_entrypoint:
+                print("Voice not enrolled. Starting in talk mode so you can re-enroll from Settings.")
+                self.voice_mode = "talk"
+                self.talk_mode = True
+            else:
+                print("Voice not enrolled. Please run with --enroll first.")
+                return
         if not self.talk_mode and self.config.get("voice_fingerprint", {}).get("enabled", False) and not self.voice_fingerprint.enabled:
             print("Voice fingerprinting failed to initialize; aborting to avoid unverified dictation.")
             return
@@ -2644,6 +2680,7 @@ def install_macos_launcher() -> int:
     command_path = Path(command).expanduser()
     if not command_path.is_absolute():
         command_path = (Path.cwd() / command_path).resolve()
+    source_dir = Path(__file__).resolve().parent
 
     app_dir = Path.home() / "Applications" / "Bloviate.app"
     paste_helper_app_dir = Path.home() / "Applications" / "Bloviate Paste Helper.app"
@@ -2914,6 +2951,7 @@ exec -a Bloviate {shlex.quote(str(command_path))} "$@"
 #include <unistd.h>
 
 #define BLOVIATE_COMMAND {c_string(str(command_path))}
+#define BLOVIATE_SOURCE_DIR {c_string(str(source_dir))}
 
 static void prepend_env(const char *name, const char *value) {{
     const char *old_value = getenv(name);
@@ -3032,6 +3070,7 @@ int main(int argc, char **argv) {{
     setup_logging(entrypoint);
     prepend_env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
     prepend_env("PYTHONPATH", site_packages);
+    prepend_env("PYTHONPATH", BLOVIATE_SOURCE_DIR);
     setenv("PYTHONUNBUFFERED", "1", 1);
     setenv("PYTHONNOUSERSITE", "1", 1);
     setenv("BLOVIATE_APP_LAUNCHER", "1", 1);

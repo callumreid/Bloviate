@@ -50,6 +50,26 @@ class NoiseSuppressorSpeechGateTests(unittest.TestCase):
 
         self.assertTrue(NoiseSuppressor.has_speech(suppressor, []))
 
+    def test_has_speech_accepts_quiet_energy_fallback(self):
+        suppressor = NoiseSuppressor.__new__(NoiseSuppressor)
+        suppressor.config = {
+            "noise_suppression": {
+                "speech_min_rms": 0.0004,
+                "speech_min_frames": 3,
+                "speech_min_ratio": 0.12,
+                "speech_energy_fallback_rms": 0.0005,
+            }
+        }
+
+        suppressor.speech_stats = lambda audio: {
+            "rms": 0.0006,
+            "frames": 153,
+            "speech_frames": 0,
+            "speech_ratio": 0.0,
+        }
+
+        self.assertTrue(NoiseSuppressor.has_speech(suppressor, []))
+
 
 if __name__ == "__main__":
     unittest.main()

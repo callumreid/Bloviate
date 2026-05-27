@@ -57,6 +57,10 @@ noise_suppression:
   stationary_noise_reduction: 0.7  # 0-1 (aggressive enough for noise, safer for ASR detail)
   vad_aggressiveness: 3  # 0-3, higher = more aggressive
   spectral_gate_threshold: 0.03
+  speech_min_rms: 0.003  # final-pass gate; lower for very quiet microphones
+  speech_min_frames: 3
+  speech_min_ratio: 0.12
+  speech_energy_fallback_rms: null  # set ~0.0005 for AirPods/quiet whisper fallback
 
 # Transcription
 transcription:

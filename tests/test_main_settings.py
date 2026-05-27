@@ -18,6 +18,8 @@ class MainSettingsTests(unittest.TestCase):
         app = main.Bloviate.__new__(main.Bloviate)
         app.verbose_logs = False
         app.ui_window = None
+        app.is_recording = False
+        app.is_command_recording = False
         app.config = {
             "__config_path__": str(config_path),
             "__config_dir__": str(config_path.parent),
@@ -35,6 +37,7 @@ class MainSettingsTests(unittest.TestCase):
             profile_path=config_path.parent / "voice_profile.pkl",
             is_enrolled=lambda: True,
             save_profile=lambda: None,
+            clear_profile=lambda: app.voice_fingerprint.enrolled_embeddings.clear(),
         )
         app.transcriber = SimpleNamespace(
             reload_personal_dictionary=lambda: {"preferred_terms": 2, "corrections": 3}
@@ -83,6 +86,36 @@ class MainSettingsTests(unittest.TestCase):
             self.assertEqual(app.config["voice_fingerprint"]["mode"], "talk")
             saved = config_path.read_text(encoding="utf-8")
             self.assertIn("mode: talk", saved)
+
+    def test_voice_profile_status_includes_next_enrollment_phrase(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "config.yaml"
+            app = self._make_app(config_path)
+            app.voice_fingerprint.enrolled_embeddings = [object(), object()]
+            app.voice_fingerprint.is_enrolled = lambda: False
+
+            status = app.get_voice_profile_status()
+
+            self.assertEqual(status["next_sample_number"], 3)
+            self.assertEqual(
+                status["next_sample_phrase"],
+                main.enrollment_phrase_for_sample(2),
+            )
+
+    def test_clear_voice_profile_switches_to_talk_mode(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "config.yaml"
+            app = self._make_app(config_path)
+            app.voice_fingerprint.enrolled_embeddings = [object()]
+
+            ok, message = app.clear_voice_profile()
+
+            self.assertTrue(ok, message)
+            self.assertEqual(app.voice_fingerprint.enrolled_embeddings, [])
+            self.assertTrue(app.talk_mode)
+            self.assertEqual(app.voice_mode, "talk")
+            self.assertEqual(app.config["voice_fingerprint"]["mode"], "talk")
+            self.assertIn("Switched to talk mode", message)
 
     def test_reload_personal_dictionary_reports_counts(self):
         with tempfile.TemporaryDirectory() as tempdir:
