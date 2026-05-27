@@ -57,6 +57,74 @@ def normalize_audio_level_for_meter(raw_level: float) -> float:
     return max(0.0, min(normalized, 1.0))
 
 
+def _clamp_mic_sensitivity(value) -> int:
+    try:
+        numeric = int(round(float(value)))
+    except (TypeError, ValueError):
+        numeric = 50
+    return max(0, min(numeric, 100))
+
+
+def mic_sensitivity_settings(value) -> dict[str, object]:
+    sensitivity = _clamp_mic_sensitivity(value)
+    t = sensitivity / 100.0
+
+    def log_interp(loud_threshold: float, quiet_threshold: float) -> float:
+        return round(loud_threshold * ((quiet_threshold / loud_threshold) ** t), 7)
+
+    if sensitivity >= 70:
+        vad_aggressiveness = 0
+    elif sensitivity >= 45:
+        vad_aggressiveness = 1
+    elif sensitivity >= 25:
+        vad_aggressiveness = 2
+    else:
+        vad_aggressiveness = 3
+
+    if sensitivity >= 80:
+        min_frames = 1
+    elif sensitivity >= 45:
+        min_frames = 2
+    else:
+        min_frames = 3
+
+    return {
+        "noise_suppression.mic_sensitivity": sensitivity,
+        "noise_suppression.stationary_noise_reduction": round(0.75 - 0.35 * t, 2),
+        "noise_suppression.vad_aggressiveness": vad_aggressiveness,
+        "noise_suppression.speech_min_rms": log_interp(0.003, 0.00004),
+        "noise_suppression.speech_min_frames": min_frames,
+        "noise_suppression.speech_min_ratio": round(0.12 - 0.115 * t, 4),
+        "noise_suppression.speech_energy_fallback_rms": log_interp(0.0012, 0.00004),
+    }
+
+
+def mic_sensitivity_from_config(noise_config: dict) -> int:
+    if not isinstance(noise_config, dict):
+        return 50
+    if "mic_sensitivity" in noise_config:
+        return _clamp_mic_sensitivity(noise_config.get("mic_sensitivity"))
+    try:
+        rms = max(0.00004, min(float(noise_config.get("speech_min_rms", 0.003)), 0.003))
+    except (TypeError, ValueError):
+        return 50
+    t = math.log(rms / 0.003) / math.log(0.00004 / 0.003)
+    return _clamp_mic_sensitivity(t * 100)
+
+
+def mic_sensitivity_label(value) -> str:
+    sensitivity = _clamp_mic_sensitivity(value)
+    if sensitivity >= 85:
+        mode = "AirPods / whisper"
+    elif sensitivity >= 65:
+        mode = "Quiet mic"
+    elif sensitivity >= 35:
+        mode = "Normal"
+    else:
+        mode = "Reject background"
+    return f"{sensitivity}% - {mode}"
+
+
 class UISignals(QObject):
     """Signals for thread-safe UI updates."""
     update_audio_level = pyqtSignal(float)
@@ -2021,6 +2089,14 @@ class BloviateUI(QMainWindow):
         self.use_dictionary_checkbox.setChecked(bool(tx_cfg.get("use_custom_dictionary", True)))
         self.noise_suppression_checkbox = QCheckBox("Enable noise suppression")
         self.noise_suppression_checkbox.setChecked(bool(ns_cfg.get("enabled", True)))
+        self.mic_sensitivity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.mic_sensitivity_slider.setRange(0, 100)
+        self.mic_sensitivity_slider.setSingleStep(5)
+        self.mic_sensitivity_slider.setPageStep(10)
+        self.mic_sensitivity_slider.setTickInterval(10)
+        self.mic_sensitivity_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.mic_sensitivity_slider.setValue(mic_sensitivity_from_config(ns_cfg))
+        self.mic_sensitivity_label = QLabel(mic_sensitivity_label(self.mic_sensitivity_slider.value()))
         self.history_enabled_checkbox = QCheckBox("Save local transcript history")
         self.history_enabled_checkbox.setChecked(bool(self.config.get("history", {}).get("enabled", True)))
         dictation_layout.addRow("Final pass:", self.final_pass_combo)
@@ -2028,6 +2104,8 @@ class BloviateUI(QMainWindow):
         dictation_layout.addRow("", self.auto_paste_checkbox)
         dictation_layout.addRow("", self.use_dictionary_checkbox)
         dictation_layout.addRow("", self.noise_suppression_checkbox)
+        dictation_layout.addRow("Mic sensitivity:", self.mic_sensitivity_slider)
+        dictation_layout.addRow("", self.mic_sensitivity_label)
         dictation_layout.addRow("", self.history_enabled_checkbox)
         dictation_actions = QHBoxLayout()
         self.apply_dictation_button = QPushButton("Apply Dictation Settings")
@@ -2039,6 +2117,7 @@ class BloviateUI(QMainWindow):
         dictation_layout.addRow("", self.dictation_status_label)
         layout.addWidget(dictation_group)
         self.apply_dictation_button.clicked.connect(self._apply_dictation_settings)
+        self.mic_sensitivity_slider.valueChanged.connect(self._update_mic_sensitivity_preview)
 
         # Models and providers
         model_group = QGroupBox("Models && Providers")
@@ -2862,6 +2941,7 @@ class BloviateUI(QMainWindow):
             "noise_suppression.enabled": self.noise_suppression_checkbox.isChecked(),
             "history.enabled": self.history_enabled_checkbox.isChecked(),
         }
+        updates.update(mic_sensitivity_settings(self.mic_sensitivity_slider.value()))
         callback = self.set_general_settings or self.set_transcription_settings
         if not callback:
             self._set_settings_status(self.dictation_status_label, "Dictation updates unavailable.", ok=False)
@@ -2874,9 +2954,17 @@ class BloviateUI(QMainWindow):
             self.config.setdefault("transcription", {})["use_custom_dictionary"] = updates[
                 "transcription.use_custom_dictionary"
             ]
-            self.config.setdefault("noise_suppression", {})["enabled"] = updates["noise_suppression.enabled"]
+            ns_cfg = self.config.setdefault("noise_suppression", {})
+            for key, value in updates.items():
+                if key.startswith("noise_suppression."):
+                    ns_cfg[key.split(".", 1)[1]] = value
             self.config.setdefault("history", {})["enabled"] = updates["history.enabled"]
+            self._update_mic_sensitivity_preview(ns_cfg.get("mic_sensitivity"))
         self._set_settings_status(self.dictation_status_label, message, ok=ok)
+
+    def _update_mic_sensitivity_preview(self, value):
+        if hasattr(self, "mic_sensitivity_label"):
+            self.mic_sensitivity_label.setText(mic_sensitivity_label(value))
 
     def _apply_model_settings(self):
         priority = [
