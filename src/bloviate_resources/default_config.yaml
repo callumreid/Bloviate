@@ -169,7 +169,7 @@ openai:
   min_gain_db: -8.0
   peak_ceiling: 0.95
   min_transcribe_rms: 0.00008  # Skip near-silent clips instead of letting STT hallucinate
-  prompt_min_rms: 0.0015  # Avoid vocabulary over-bias on ultra-quiet clips
+  prompt_min_rms: 0.005  # Avoid vocabulary over-bias on quiet/whisper clips
 
 # UI
 ui:

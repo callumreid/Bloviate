@@ -17,6 +17,7 @@ class TranscriberPromptTermsTests(unittest.TestCase):
         transcriber = Transcriber.__new__(Transcriber)
         transcriber.transcription_config = {"prompt_terms": ["OpenAI"]}
         transcriber.deepgram_config = {"keyterm": ["Claude"]}
+        transcriber.use_custom_dictionary = True
         transcriber.learned_terms = ["Bloviate"]
         transcriber.custom_dictionary = [
             {
@@ -33,12 +34,23 @@ class TranscriberPromptTermsTests(unittest.TestCase):
 
         self.assertEqual(terms, ["OpenAI", "Bloviate"])
 
+    def test_prompt_terms_respect_custom_dictionary_toggle(self):
+        transcriber = Transcriber.__new__(Transcriber)
+        transcriber.transcription_config = {"prompt_terms": ["OpenAI"]}
+        transcriber.use_custom_dictionary = False
+        transcriber.learned_terms = ["Bloviate"]
+
+        terms = Transcriber._build_prompt_terms(transcriber)
+
+        self.assertEqual(terms, ["OpenAI"])
+
     def test_deepgram_bias_terms_ignore_correction_phrases(self):
         transcriber = Transcriber.__new__(Transcriber)
         transcriber.deepgram_config = {
             "keyterm": ["Claude"],
             "include_dictionary_keyterms": True,
         }
+        transcriber.use_custom_dictionary = True
         transcriber.learned_terms = ["Bloviate"]
         transcriber.custom_dictionary = [
             {
@@ -51,6 +63,20 @@ class TranscriberPromptTermsTests(unittest.TestCase):
         terms = Transcriber._build_deepgram_bias_terms(transcriber)
 
         self.assertEqual(terms, ["Claude", "Bloviate"])
+
+    def test_deepgram_bias_terms_respect_custom_dictionary_toggle(self):
+        transcriber = Transcriber.__new__(Transcriber)
+        transcriber.deepgram_config = {
+            "keyterm": ["Claude"],
+            "include_dictionary_keyterms": True,
+        }
+        transcriber.use_custom_dictionary = False
+        transcriber.learned_terms = ["Bloviate"]
+        transcriber._deepgram_max_keyterms = 20
+
+        terms = Transcriber._build_deepgram_bias_terms(transcriber)
+
+        self.assertEqual(terms, ["Claude"])
 
     def test_reload_personal_dictionary_rebuilds_prompt_assets(self):
         transcriber = Transcriber.__new__(Transcriber)

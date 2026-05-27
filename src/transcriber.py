@@ -578,15 +578,22 @@ class Transcriber:
         return []
 
     def _build_prompt_terms(self) -> List[str]:
-        """Build generic prompt terms from explicit config plus preferred vocabulary only."""
+        """Build generic prompt terms from explicit config plus optional preferred vocabulary."""
         terms: List[str] = []
         seen = set()
 
         for term in self._coerce_string_list(self.transcription_config.get("prompt_terms")):
             self._append_unique_term(terms, seen, term)
 
-        for term in self.learned_terms:
-            self._append_unique_term(terms, seen, term)
+        include_dictionary_terms = bool(
+            self.transcription_config.get(
+                "include_dictionary_prompt_terms",
+                getattr(self, "use_custom_dictionary", True),
+            )
+        )
+        if include_dictionary_terms:
+            for term in self.learned_terms:
+                self._append_unique_term(terms, seen, term)
 
         return terms
 
@@ -609,8 +616,13 @@ class Transcriber:
         for term in self._coerce_string_list(self.deepgram_config.get("keyterm")):
             self._append_unique_term(terms, seen, term, max_length=80)
 
-        for term in self.learned_terms:
-            self._append_unique_term(terms, seen, term, max_length=80)
+        include_dictionary_terms = bool(self.deepgram_config.get("include_dictionary_keyterms", True))
+        include_dictionary_terms = include_dictionary_terms and bool(
+            getattr(self, "use_custom_dictionary", True)
+        )
+        if include_dictionary_terms:
+            for term in self.learned_terms:
+                self._append_unique_term(terms, seen, term, max_length=80)
 
         if len(terms) > self._deepgram_max_keyterms:
             terms = terms[:self._deepgram_max_keyterms]
@@ -1006,7 +1018,7 @@ class Transcriber:
         }
 
         prompt = self._compose_prompt("openai", mode=mode)
-        prompt_min_rms = float(self.openai_config.get("prompt_min_rms", 0.0015))
+        prompt_min_rms = float(self.openai_config.get("prompt_min_rms", 0.005))
         if prompt and rms >= prompt_min_rms:
             fields["prompt"] = prompt
 
