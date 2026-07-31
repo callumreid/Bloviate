@@ -5,6 +5,7 @@ Procedural achievement badge rendering.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 from app_paths import achievement_badges_dir
@@ -50,18 +51,41 @@ class AchievementBadgeRenderer:
         suffix = "unlocked" if unlocked else "locked"
         return self.badges_dir / f"v{RENDERER_VERSION}-{definition.id}-{suffix}.png"
 
+    @staticmethod
+    def _is_valid_png(path: Path) -> bool:
+        """Reject truncated cache files (crash mid-write) so they get re-rendered."""
+        try:
+            with open(path, "rb") as f:
+                header = f.read(8)
+                f.seek(-8, os.SEEK_END)
+                trailer = f.read(8)
+            return header == b"\x89PNG\r\n\x1a\n" and trailer == b"IEND\xaeB`\x82"
+        except OSError:
+            return False
+
+    @staticmethod
+    def _write_atomic(path: Path, data: bytes):
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+
     def render_badge(self, definition: AchievementDefinition, *, unlocked: bool = True, size: int = 192) -> Path:
         path = self.badge_path(definition, unlocked=unlocked)
         if path.exists():
-            return path
+            if self._is_valid_png(path):
+                return path
+            try:
+                path.unlink()
+            except OSError:
+                pass
         try:
             from PyQt6.QtCore import QPointF, QRectF, Qt
             from PyQt6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPen, QPolygonF
         except Exception:
-            path.write_bytes(FALLBACK_PNG)
+            self._write_atomic(path, FALLBACK_PNG)
             return path
         if QGuiApplication.instance() is None:
-            path.write_bytes(FALLBACK_PNG)
+            self._write_atomic(path, FALLBACK_PNG)
             return path
 
         image = QImage(size, size, QImage.Format.Format_ARGB32)
@@ -108,12 +132,17 @@ class AchievementBadgeRenderer:
         except Exception:
             if painter.isActive():
                 painter.end()
-            path.write_bytes(FALLBACK_PNG)
+            self._write_atomic(path, FALLBACK_PNG)
             return path
         finally:
             if painter.isActive():
                 painter.end()
-        image.save(str(path), "PNG")
+        # Atomic save: a crash mid-write must never leave a truncated PNG behind.
+        tmp = path.with_name(path.name + ".tmp")
+        if image.save(str(tmp), "PNG"):
+            os.replace(tmp, path)
+        else:
+            self._write_atomic(path, FALLBACK_PNG)
         return path
 
     def _palette(self, definition: AchievementDefinition) -> tuple[str, str, str]:

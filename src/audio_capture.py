@@ -3,6 +3,7 @@ Audio capture module for Bloviate.
 Handles audio input from Scarlett 4i4 interface.
 """
 
+import collections
 import math
 import sounddevice as sd
 import numpy as np
@@ -27,6 +28,13 @@ class AudioCapture:
             8,
             int(config.get('audio', {}).get('queue_max_chunks', 80) or 80),
         )
+        self.preroll_seconds = max(
+            0.0, float(config.get('audio', {}).get('preroll_seconds', 1.5) or 0.0)
+        )
+        chunk_duration_s = self.chunk_size / float(self.sample_rate)
+        preroll_chunks = int(self.preroll_seconds / chunk_duration_s) if chunk_duration_s > 0 else 0
+        self._preroll = collections.deque(maxlen=max(1, preroll_chunks)) if preroll_chunks else None
+        self._preroll_lock = threading.Lock()
         self.audio_queue = queue.Queue(maxsize=self.queue_max_chunks)
         self.stream: Optional[sd.InputStream] = None
         self.is_listening = False
@@ -163,15 +171,21 @@ class AudioCapture:
             if status and getattr(self, "verbose_logs", False):
                 print(f"Audio callback status: {status}")
 
-            if not self.is_listening:
-                return
-
             audio_data = indata.copy()
 
             if self._needs_resample:
                 audio_data = resample_poly(
                     audio_data, self._resample_up, self._resample_down, axis=0
                 ).astype(np.float32)
+
+            # Rolling pre-roll runs whenever the stream is up so a PTT press
+            # never loses the first syllable (or a press during stream start).
+            if self._preroll is not None:
+                with self._preroll_lock:
+                    self._preroll.append(audio_data)
+
+            if not self.is_listening:
+                return
 
             self._put_audio_chunk(audio_data)
             for callback in list(self.callbacks):
@@ -215,12 +229,27 @@ class AudioCapture:
     def stop(self):
         """Stop the audio stream."""
         self.is_listening = False
+        if self._preroll is not None:
+            with self._preroll_lock:
+                self._preroll.clear()
         if self.stream is not None:
             self.stream.stop()
             self.stream.close()
             self.stream = None
             if getattr(self, "verbose_logs", False):
                 print("Audio stream stopped")
+
+    def get_preroll(self, seconds: float) -> list:
+        """Return the most recent `seconds` of buffered pre-roll chunks."""
+        if self._preroll is None or seconds <= 0:
+            return []
+        chunk_duration_s = self.chunk_size / float(self.sample_rate)
+        wanted = int(seconds / chunk_duration_s) if chunk_duration_s > 0 else 0
+        if wanted <= 0:
+            return []
+        with self._preroll_lock:
+            chunks = list(self._preroll)
+        return chunks[-wanted:]
 
     def register_callback(self, callback: Callable):
         """Register a callback to receive audio data."""

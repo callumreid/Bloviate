@@ -130,18 +130,8 @@ def _save_config(config: dict) -> Path:
     return save_config(config)
 
 
-def _repair_launcher_python_executable():
-    """Point multiprocessing helpers at the real Python, not Bloviate.app.
-
-    The native macOS launcher embeds Python so macOS sees a stable app bundle for
-    permissions. Some dependencies use multiprocessing resource-tracker helpers,
-    which relaunch ``sys.executable`` with Python-internal ``-c`` arguments. If
-    that executable is Bloviate.app, the helper accidentally starts the Bloviate
-    CLI and can leave startup/processing in a bad state.
-    """
-    if os.getenv("BLOVIATE_APP_LAUNCHER") != "1":
-        return
-
+def _find_real_python() -> Optional[str]:
+    """Locate the actual venv Python interpreter backing this process."""
     candidates: list[Path] = []
     for base in (Path(sys.prefix), Path(sys.exec_prefix)):
         candidates.extend([base / "bin" / "python3", base / "bin" / "python"])
@@ -153,24 +143,87 @@ def _repair_launcher_python_executable():
     except Exception:
         pass
 
-    current = Path(sys.executable).resolve()
     for candidate in candidates:
         try:
             resolved = candidate.resolve()
         except OSError:
             continue
-        if resolved == current or not resolved.is_file():
-            continue
-        if os.access(resolved, os.X_OK):
-            sys.executable = str(resolved)
-            os.environ["PYTHONEXECUTABLE"] = str(resolved)
-            try:
-                import multiprocessing
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return str(resolved)
+    return None
 
-                multiprocessing.set_executable(str(resolved))
-            except Exception:
-                pass
+
+def _reexec_python_internal_invocation():
+    """Re-exec Python-internal child invocations that landed on the Bloviate CLI.
+
+    multiprocessing helpers (resource_tracker, spawn) relaunch ``sys.executable``
+    with interpreter flags like ``-s -c <code>``. When sys.executable points at
+    the Bloviate launcher/console script instead of Python, those args would hit
+    argparse and crash-loop the helper. Hand them to the real interpreter.
+    """
+    argv = sys.argv[1:]
+    if not argv or not argv[0].startswith("-") or argv[0].startswith("--"):
+        return
+    interpreter_flags = {"-c", "-s", "-S", "-E", "-I", "-B", "-u", "-O", "-OO", "-m"}
+    if argv[0] not in interpreter_flags:
+        return
+    real_python = _find_real_python()
+    if not real_python:
+        return
+    os.execv(real_python, [real_python] + argv)
+
+
+def _repair_launcher_python_executable():
+    """Point multiprocessing helpers at the real Python, not Bloviate.app.
+
+    The native macOS launcher embeds Python so macOS sees a stable app bundle for
+    permissions. Some dependencies use multiprocessing resource-tracker helpers,
+    which relaunch ``sys.executable`` with Python-internal ``-c`` arguments. If
+    that executable is not a real Python (Bloviate.app or the console script),
+    the helper accidentally starts the Bloviate CLI and crash-loops. Repair
+    unconditionally: the env-var gate used before this missed real launches.
+    """
+    exe_name = Path(sys.executable).name.lower()
+    if exe_name.startswith("python"):
+        return
+
+    current = None
+    try:
+        current = Path(sys.executable).resolve()
+    except OSError:
+        pass
+    real_python = _find_real_python()
+    if not real_python or (current is not None and Path(real_python) == current):
+        return
+
+    sys.executable = real_python
+    os.environ["PYTHONEXECUTABLE"] = real_python
+    try:
+        import multiprocessing
+
+        multiprocessing.set_executable(real_python)
+    except Exception:
+        pass
+
+
+def _rotate_launcher_log(max_bytes: int = 5 * 1024 * 1024):
+    """Copy-truncate launcher.log when oversized.
+
+    The launchers open the log with O_APPEND, so truncating in place is safe:
+    their next write seeks to the new end of file.
+    """
+    try:
+        from app_paths import logs_dir
+
+        log_path = logs_dir() / "launcher.log"
+        if not log_path.is_file() or log_path.stat().st_size <= max_bytes:
             return
+        rotated = log_path.with_suffix(".log.1")
+        shutil.copyfile(log_path, rotated)
+        with open(log_path, "r+") as f:
+            f.truncate(0)
+    except OSError:
+        pass
 
 
 def _is_verbose_logging_enabled(config: dict) -> bool:
@@ -598,7 +651,7 @@ def run_doctor(config_path: str) -> int:
         missing_bins = []
         if output_format in {"clipboard", "both"} and shutil.which("pbcopy") is None:
             missing_bins.append("pbcopy")
-        if (auto_paste or window_management_enabled) and shutil.which("osascript") is None:
+        if window_management_enabled and shutil.which("osascript") is None:
             missing_bins.append("osascript")
 
         if missing_bins:
@@ -734,6 +787,11 @@ class Bloviate:
         self._audio_start_lock = threading.Lock()
         self._audio_start_in_progress = False
         self._audio_start_error = None
+        self._pending_ptt_press = False
+        self._ptt_preroll_capture_s = max(
+            0.0, float(self.config.get("ptt", {}).get("preroll_capture_s", 0.4) or 0.0)
+        )
+        self._dictation_started_at = 0.0
         self._interim_update_interval_s = float(
             self.config.get("ui", {}).get("interim_update_interval_s", 0.15)
         )
@@ -1485,8 +1543,13 @@ class Bloviate:
             print(f"[Audio] Capture ready ({reason})")
             if self.ui_window:
                 self.ui_window.signals.update_status.emit("Ready")
+            if self._pending_ptt_press and not self._shutdown_event.is_set():
+                self._pending_ptt_press = False
+                print("[PTT] Resuming deferred press now that capture is ready")
+                self.on_ptt_press()
         except Exception as exc:
             self._audio_start_error = str(exc)
+            self._pending_ptt_press = False
             print(f"[Permissions] Audio capture could not start yet: {exc}")
             if self.ui_window:
                 self.ui_window.signals.update_status.emit("Microphone permission needed")
@@ -1611,8 +1674,10 @@ class Bloviate:
                 self.ui_window.signals.update_status.emit("Still processing previous clip...")
             return
         if getattr(self.audio_capture, "stream", None) is None:
+            # Remember the press: recording auto-starts the moment capture is up.
+            self._pending_ptt_press = True
             self._start_audio_capture_async("dictation")
-            print("[PTT] Ignored: audio input is still starting")
+            print("[PTT] Deferred: audio input is starting, will record when ready")
             if self.ui_window:
                 self.ui_window.signals.update_status.emit("Starting microphone...")
             return
@@ -1622,22 +1687,35 @@ class Bloviate:
             self.ui_window.signals.update_ptt_status.emit(True)
             self.ui_window.signals.update_status.emit("Listening...")
 
-        self.recorded_audio = []
+        preroll = self.audio_capture.get_preroll(self._ptt_preroll_capture_s)
+        self.recorded_audio = list(preroll)
         self.audio_capture.clear_queue()
         self._last_interim_text = ""
         self._last_interim_update = 0.0
+        self._dictation_started_at = time.monotonic()
         self.is_recording = True
         self.audio_capture.is_listening = True
 
         if self.transcriber.supports_streaming():
             # Connect asynchronously so PTT press returns immediately
             self._start_worker(self.transcriber.start_stream, "dictation")
+            # Seed the stream with the pre-roll so the first syllable survives.
+            for chunk in preroll:
+                self.transcriber.send_audio_chunk("dictation", chunk)
 
     def on_ptt_release(self):
         """Called when PTT is released."""
         if self._shutdown_event.is_set():
             return
         if not self.is_recording:
+            if self._pending_ptt_press:
+                # Released before the mic finished starting; don't record later.
+                self._pending_ptt_press = False
+                print("[PTT] Released while microphone was starting - try again")
+                if self.ui_window:
+                    self.ui_window.signals.update_status.emit(
+                        "Mic was still starting - press and speak again"
+                    )
             return
         print("[PTT] Released")
 
@@ -1703,6 +1781,10 @@ class Bloviate:
     def _setup_mode_cycle_tap(self):
         """Register the quick command-key tap gesture for cleanup-mode cycling."""
         ptt_cfg = self.config.get("ptt", {})
+        if not bool(ptt_cfg.get("mode_cycle_enabled", False)):
+            # Off by default: accidental taps silently change output style,
+            # which reads as "the app rewrote my words".
+            return
         tap_key = str(ptt_cfg.get("mode_cycle_tap_key", "<cmd>") or "").strip()
         if not tap_key:
             return
@@ -2288,16 +2370,41 @@ class Bloviate:
                     "unrecognized"
                 )
 
+    def _log_dictation_summary(
+        self,
+        *,
+        outcome: str,
+        duration_s: float,
+        raw_rms: float,
+        similarity: float,
+        provider: str,
+        started_at: float,
+        text_len: int = 0,
+    ):
+        """One structured line per dictation so failures are diagnosable later."""
+        latency_ms = int((time.monotonic() - started_at) * 1000) if started_at else -1
+        verify = "bypass" if similarity < 0 else f"{similarity:.3f}"
+        capture = getattr(self, "audio_capture", None)
+        device = capture.get_active_device_label() if capture is not None else "unknown"
+        print(
+            "[DictationSummary] "
+            f"outcome={outcome} device=\"{device}\" "
+            f"dur_s={duration_s:.2f} raw_rms={raw_rms:.5f} verify={verify} "
+            f"provider={provider or 'none'} latency_ms={latency_ms} chars={text_len}"
+        )
+
     def process_recording(self, recorded_chunks=None):
         """Process the recorded audio."""
         if self._shutdown_event.is_set():
             return
+        t_release = time.monotonic()
         if recorded_chunks is None:
             recorded_chunks = self.recorded_audio
         # Concatenate all recorded chunks
         raw_audio = np.concatenate(recorded_chunks).flatten()
+        duration_s = len(raw_audio) / self.config['audio']['sample_rate']
 
-        print(f"Processing {len(raw_audio)} samples ({len(raw_audio)/self.config['audio']['sample_rate']:.2f}s)")
+        print(f"Processing {len(raw_audio)} samples ({duration_s:.2f}s)")
 
         # Finalize streaming (if enabled) before running heavy processing
         stream_text = None
@@ -2367,9 +2474,26 @@ class Bloviate:
                 if self.ui_window:
                     self.ui_window.signals.update_rejected_transcription.emit(output_text)
                     self.ui_window.signals.update_status.emit("Voice rejected; transcript saved to history")
+                self._log_dictation_summary(
+                    outcome="voice_rejected",
+                    duration_s=duration_s,
+                    raw_rms=raw_speech['rms'],
+                    similarity=similarity,
+                    provider=provider_used,
+                    started_at=t_release,
+                    text_len=len(output_text),
+                )
             else:
                 if self.ui_window:
                     self.ui_window.signals.update_status.emit("Voice rejected")
+                self._log_dictation_summary(
+                    outcome="voice_rejected_no_text",
+                    duration_s=duration_s,
+                    raw_rms=raw_speech['rms'],
+                    similarity=similarity,
+                    provider=provider_used,
+                    started_at=t_release,
+                )
             return
 
         # Transcribe (use streaming result if available)
@@ -2397,10 +2521,15 @@ class Bloviate:
                 print(f"[Post-processing] {processed.mode}/{processed.provider}: {output_text}")
 
             self.transcriber.output_text(output_text)
-            paste_blocked = (
-                bool(self.config.get("transcription", {}).get("auto_paste", True))
-                and getattr(self.transcriber, "last_auto_paste_success", None) is False
-            )
+            auto_paste_enabled = bool(self.config.get("transcription", {}).get("auto_paste", True))
+            paste_success = getattr(self.transcriber, "last_auto_paste_success", None)
+            paste_blocked = auto_paste_enabled and paste_success is False
+            if paste_success is True:
+                paste_result = "pasted"
+            elif paste_success is False:
+                paste_result = "paste_failed"
+            else:
+                paste_result = "copied"
             self._record_history(
                 text=output_text,
                 original_text=processed.original_text,
@@ -2408,8 +2537,17 @@ class Bloviate:
                 post_processing_mode=processed.mode,
                 provider=provider_used,
                 voice_score=None if similarity < 0 else similarity,
-                duration_s=len(raw_audio) / self.config["audio"]["sample_rate"],
-                output_action=self.config.get("transcription", {}).get("output_format", "clipboard"),
+                duration_s=duration_s,
+                output_action=paste_result,
+            )
+            self._log_dictation_summary(
+                outcome=paste_result,
+                duration_s=duration_s,
+                raw_rms=raw_speech['rms'],
+                similarity=similarity,
+                provider=provider_used,
+                started_at=t_release,
+                text_len=len(output_text),
             )
 
             if self.ui_window:
@@ -2422,6 +2560,14 @@ class Bloviate:
             print("✗ No transcription generated")
             if self.ui_window:
                 self.ui_window.signals.update_status.emit("No speech detected")
+            self._log_dictation_summary(
+                outcome="no_text",
+                duration_s=duration_s,
+                raw_rms=raw_speech['rms'],
+                similarity=similarity,
+                provider=provider_used,
+                started_at=t_release,
+            )
 
     def _setup_window_management_hotkeys(self):
         """Setup window management hotkeys."""
@@ -3214,7 +3360,9 @@ int main(int argc, char **argv) {{
 
 def main():
     """Main entry point."""
+    _reexec_python_internal_invocation()
     _repair_launcher_python_executable()
+    _rotate_launcher_log()
     _load_dotenv()
     parser = argparse.ArgumentParser(description="Bloviate - Voice dictation with fingerprinting")
     parser.add_argument(

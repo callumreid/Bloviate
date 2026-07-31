@@ -16,8 +16,9 @@ audio:
   chunk_size: 1024
   channels: 1
   device_name: ""  # Blank = system default input device; set e.g. "Scarlett" to prefer a specific mic
-  start_on_launch: false  # Lazy by default so CoreAudio/permissions cannot stall the UI on open
+  start_on_launch: true  # Start capture at launch (async) so the first PTT press is never lost
   queue_max_chunks: 80  # Bound live audio buffering so idle streams cannot build backlogs
+  preroll_seconds: 1.5  # Rolling pre-roll buffer kept while the stream is up
 
 # Push-to-Talk Settings
 ptt:
@@ -26,6 +27,8 @@ ptt:
   toggle_hotkey: "<cmd>+<option>+<shift>"  # Toggle dictation on/off without holding keys
   listener_backend: "auto"  # macOS uses modifier polling for reliable modifier-only PTT
   modifier_poll_interval_ms: 40
+  preroll_capture_s: 0.4  # Pre-roll seconds prepended on PTT press so onsets survive
+  mode_cycle_enabled: false  # Opt-in: tap-cycling silently changes output style, easy to trigger by accident
   mode_cycle_tap_key: "<cmd>"  # Tap quickly to cycle output cleanup mode
   mode_cycle_tap_count: 3
   mode_cycle_tap_window_ms: 650

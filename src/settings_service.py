@@ -141,7 +141,7 @@ def _migrate_config(data: dict) -> dict:
         data["__config_migrated__"] = True
 
     audio_config = _config_section(data, "audio")
-    audio_config["start_on_launch"] = bool(audio_config.get("start_on_launch", False))
+    audio_config["start_on_launch"] = bool(audio_config.get("start_on_launch", True))
 
     ui_config = _config_section(data, "ui")
     ui_config["theme"] = normalize_theme_id(ui_config.get("theme", "light"))
