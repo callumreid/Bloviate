@@ -8,12 +8,13 @@ Bloviate is a macOS-first voice dictation app for whispering in noisy spaces. It
 
 ## What It Does
 
-- Verifies your enrolled voice before transcribing in whisper mode
+- Verifies your enrolled voice before transcribing in whisper mode, with per-device voice profiles
 - Supports talk mode when you want normal dictation without speaker verification
 - Supports hold-to-talk and toggle-to-talk; `Cmd+Option+Shift` toggles dictation by default
-- Cycles cleanup mode with three quick `Command` taps and shows the selected mode in the bottom overlay
+- Follows the system default microphone live and auto-calibrates speech gates per device
+- Keeps a rolling pre-roll buffer so the first syllable of a dictation is never lost
 - Runs isolated voice commands like `screen left half`, `run command desktop right`, or `open Slack`
-- Uses Deepgram for live interim text, OpenAI or Deepgram for final text, and local Whisper as fallback
+- Uses Deepgram for live interim text, OpenAI or Deepgram for final text (within a hard latency budget), and local MLX Whisper / Whisper offline
 - Lets you configure audio input, hotkeys, models, providers, API keys, dictionary, cleanup, history, startup behavior, and diagnostics from Settings
 - Shows local usage insights in Settings: words dictated, speaking pace, cleanup fixes, app breakdown, and streak heatmap
 - Tracks 500+ local achievements with generated badge art, progress search, secret unlocks, and opt-in AI-assisted content achievements
@@ -133,7 +134,9 @@ Older repo-local `custom_dictionary.yaml`, `personal_dictionary.yaml`, and `lear
 - Coding: avoids prose rewrites that would damage commands, filenames, or identifiers.
 - Message: formats dictated text like a concise message; it differs most when OpenAI cleanup is enabled.
 
-Tap `Command` three times quickly to cycle these modes without opening Settings. The bottom waveform overlay briefly expands to show the new mode.
+Per-app overrides live in `post_processing.app_modes` (for example `{"iTerm2": "coding", "Slack": "message"}`), so a global mode never silently rewrites a coding dictation.
+
+Tap-to-cycle (three quick `Command` taps) is off by default because accidental taps silently change the output style; enable it with `ptt.mode_cycle_enabled: true`.
 
 ## Voice Commands
 
@@ -213,6 +216,14 @@ On macOS, grant permissions to the app host you use to run Bloviate:
 - Automation/System Events: required for window-management commands
 
 If running through Terminal or iTerm, grant permissions to that terminal app. If launching `~/Applications/Bloviate.app`, grant permissions to Bloviate.
+
+## Reliability & Eval
+
+- Every dictation logs one `[DictationSummary]` line (device, RMS, verify score, provider, latency, paste result), and Settings insights show paste reliability over the last 100 dictations.
+- Voice-rejected transcripts are recoverable from the menu bar (`Paste Last Rejected Dictation`).
+- Clips that contain no detectable speech are never sent to cloud STT, which is where near-silence used to come back as hallucinated words.
+- `eval/` holds a WER/latency harness over your own recorded clips — see [eval/README.md](eval/README.md). Record with `bloviate --record-eval-clip <name>`.
+- `bloviate --suggest-terms-from-vault` mines an Obsidian vault for dictionary term candidates.
 
 ## Development
 
