@@ -118,12 +118,21 @@ class VoiceFingerprint:
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
         self.profile_path = self.model_dir / "voice_profile.pkl"
+        self.multi_profile_path = self.model_dir / "voice_profiles.pkl"
         self.legacy_profile_path = legacy_repo_voice_profile_path()
 
         self.encoder = None
         self._encoder_load_attempted = False
 
-        # Load existing voice profile if available
+        # Profiles are stored per input device: embeddings shift between mics,
+        # so a profile enrolled on one rig false-rejects on another.
+        self.DEFAULT_PROFILE = "__default__"
+        self._profiles: dict = {}
+        self.active_device: str = ""
+        self._cross_profile_warned = False
+
+        # Active-profile views kept for backwards compatibility (external
+        # scripts read these attribute names).
         self.enrolled_embeddings: List[np.ndarray] = []
         self.reference_embedding: Optional[np.ndarray] = None
         self.load_profile()
@@ -226,6 +235,49 @@ class VoiceFingerprint:
 
         return float(similarity)
 
+    def _profile_key(self, device: Optional[str] = None) -> str:
+        label = str(device if device is not None else self.active_device or "").strip()
+        return label or self.DEFAULT_PROFILE
+
+    def _get_profile(self, key: str, *, create: bool = False) -> Optional[dict]:
+        profile = self._profiles.get(key)
+        if profile is None and create:
+            profile = {"embeddings": [], "reference": None}
+            self._profiles[key] = profile
+        return profile
+
+    def _sync_active_view(self):
+        """Point the compatibility attributes at the active device's profile."""
+        profile = self._get_profile(self._profile_key(), create=True)
+        self.enrolled_embeddings = profile["embeddings"]
+        self.reference_embedding = profile["reference"]
+
+    def set_active_device(self, device: str):
+        """Switch profiles when the input device changes."""
+        label = str(device or "").strip()
+        if label == self.active_device:
+            return
+        self.active_device = label
+        self._cross_profile_warned = False
+        self._sync_active_view()
+
+    def _resolve_verification_profile(self) -> tuple[Optional[dict], str]:
+        """Prefer the active device's profile; fall back to the default profile."""
+        key = self._profile_key()
+        profile = self._profiles.get(key)
+        if profile and profile.get("reference") is not None:
+            return profile, key
+        fallback = self._profiles.get(self.DEFAULT_PROFILE)
+        if fallback and fallback.get("reference") is not None:
+            if key != self.DEFAULT_PROFILE and not self._cross_profile_warned:
+                self._cross_profile_warned = True
+                print(
+                    f"[Voice] No profile enrolled for '{key}'; verifying against the "
+                    "default profile. Re-enroll on this mic for reliable matching."
+                )
+            return fallback, self.DEFAULT_PROFILE
+        return None, ""
+
     def verify_speaker(self, audio: np.ndarray) -> tuple[bool, float]:
         """
         Verify if audio matches the enrolled voice.
@@ -236,8 +288,12 @@ class VoiceFingerprint:
         Returns:
             Tuple of (is_match, similarity_score)
         """
-        if not self.enabled or self.reference_embedding is None:
-            return True, 1.0  # Pass-through if not enabled or not enrolled
+        if not self.enabled:
+            return True, 1.0  # Pass-through if not enabled
+
+        profile, _ = self._resolve_verification_profile()
+        if profile is None:
+            return True, 1.0  # Pass-through when nothing is enrolled anywhere
 
         # Extract embedding from input audio
         embedding = self.extract_embedding(audio)
@@ -245,7 +301,7 @@ class VoiceFingerprint:
             return False, 0.0
 
         # Compare with reference embedding
-        similarity = self.compute_similarity(embedding, self.reference_embedding)
+        similarity = self.compute_similarity(embedding, profile["reference"])
 
         is_match = similarity >= self.threshold
 
@@ -268,8 +324,12 @@ class VoiceFingerprint:
         if embedding is None:
             return False
 
-        self.enrolled_embeddings.append(embedding)
-        print(f"Enrolled sample {len(self.enrolled_embeddings)}/{self.min_enrollment_samples}")
+        profile = self._get_profile(self._profile_key(), create=True)
+        profile["embeddings"].append(embedding)
+        print(
+            f"Enrolled sample {len(profile['embeddings'])}/{self.min_enrollment_samples} "
+            f"for '{self._profile_key()}'"
+        )
 
         # Update reference embedding (average of all enrolled samples)
         self._update_reference_embedding()
@@ -277,70 +337,137 @@ class VoiceFingerprint:
         return True
 
     def _update_reference_embedding(self):
-        """Update the reference embedding by averaging all enrolled samples."""
-        if len(self.enrolled_embeddings) == 0:
-            self.reference_embedding = None
+        """Update the active profile's reference by averaging its samples."""
+        profile = self._get_profile(self._profile_key(), create=True)
+        if len(profile["embeddings"]) == 0:
+            profile["reference"] = None
         else:
-            self.reference_embedding = np.mean(
-                np.array(self.enrolled_embeddings), axis=0
-            )
+            profile["reference"] = np.mean(np.array(profile["embeddings"]), axis=0)
+        self._sync_active_view()
+
+    def _profile_sample_count(self, key: str) -> int:
+        profile = self._profiles.get(key)
+        return len(profile["embeddings"]) if profile else 0
 
     def is_enrolled(self) -> bool:
-        """Check if user has completed voice enrollment."""
-        return len(self.enrolled_embeddings) >= self.min_enrollment_samples
+        """True when the active device (or the default profile) is fully enrolled."""
+        if self._profile_sample_count(self._profile_key()) >= self.min_enrollment_samples:
+            return True
+        return self._profile_sample_count(self.DEFAULT_PROFILE) >= self.min_enrollment_samples
+
+    def profile_summary(self) -> dict:
+        """Per-device enrollment summary for Settings/status displays."""
+        summary = {}
+        for key, profile in self._profiles.items():
+            count = len(profile.get("embeddings", []))
+            if count == 0:
+                continue
+            summary[key] = {
+                "samples": count,
+                "enrolled": count >= self.min_enrollment_samples,
+                "active": key == self._profile_key(),
+            }
+        return summary
 
     def save_profile(self):
-        """Save the voice profile to disk."""
-        if len(self.enrolled_embeddings) == 0:
+        """Save all device profiles to disk (plus a legacy mirror of the active one)."""
+        payload = {
+            "version": 2,
+            "threshold": self.threshold,
+            "profiles": {
+                key: {
+                    "embeddings": profile.get("embeddings", []),
+                    "reference": profile.get("reference"),
+                }
+                for key, profile in self._profiles.items()
+                if profile.get("embeddings")
+            },
+        }
+        if not payload["profiles"]:
             print("No enrollment data to save")
             return
 
-        profile_data = {
-            'embeddings': self.enrolled_embeddings,
-            'reference': self.reference_embedding,
-            'threshold': self.threshold,
-        }
+        self.multi_profile_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.multi_profile_path.with_name(self.multi_profile_path.name + ".tmp")
+        with open(tmp, "wb") as f:
+            pickle.dump(payload, f)
+        os.replace(tmp, self.multi_profile_path)
 
-        self.profile_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.profile_path, 'wb') as f:
-            pickle.dump(profile_data, f)
+        # Legacy single-profile mirror so external readers keep working.
+        mirror, _ = self._resolve_verification_profile()
+        if mirror is not None:
+            legacy_payload = {
+                "embeddings": mirror.get("embeddings", []),
+                "reference": mirror.get("reference"),
+                "threshold": self.threshold,
+            }
+            tmp = self.profile_path.with_name(self.profile_path.name + ".tmp")
+            with open(tmp, "wb") as f:
+                pickle.dump(legacy_payload, f)
+            os.replace(tmp, self.profile_path)
 
-        print(f"Voice profile saved to {self.profile_path}")
+        print(f"Voice profiles saved to {self.multi_profile_path}")
 
     def load_profile(self) -> bool:
-        """Load existing voice profile from disk."""
-        source_path = self.profile_path
-        if not source_path.exists() and self.legacy_profile_path.exists():
-            source_path = self.legacy_profile_path
-
-        if not source_path.exists():
-            print("No existing voice profile found")
-            return False
-
+        """Load device profiles, migrating the legacy single-profile format."""
         try:
-            with open(source_path, 'rb') as f:
-                profile_data = pickle.load(f)
+            if self.multi_profile_path.exists():
+                with open(self.multi_profile_path, "rb") as f:
+                    payload = pickle.load(f)
+                profiles = payload.get("profiles", {}) if isinstance(payload, dict) else {}
+                self._profiles = {
+                    str(key): {
+                        "embeddings": list(profile.get("embeddings", [])),
+                        "reference": profile.get("reference"),
+                    }
+                    for key, profile in profiles.items()
+                    if isinstance(profile, dict)
+                }
+                self._sync_active_view()
+                if self.verbose_logs:
+                    print(f"Voice profiles loaded: {list(self._profiles)}")
+                return bool(self._profiles)
 
-            self.enrolled_embeddings = profile_data['embeddings']
-            self.reference_embedding = profile_data['reference']
+            source_path = self.profile_path
+            if not source_path.exists() and self.legacy_profile_path.exists():
+                source_path = self.legacy_profile_path
+            if not source_path.exists():
+                print("No existing voice profile found")
+                self._sync_active_view()
+                return False
+
+            with open(source_path, "rb") as f:
+                profile_data = pickle.load(f)
+            self._profiles = {
+                self.DEFAULT_PROFILE: {
+                    "embeddings": list(profile_data.get("embeddings", [])),
+                    "reference": profile_data.get("reference"),
+                }
+            }
+            self._sync_active_view()
             if source_path != self.profile_path:
                 self.profile_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, self.profile_path)
                 print(f"Migrated voice profile to {self.profile_path}")
             if self.verbose_logs:
-                print(f"Voice profile loaded: {len(self.enrolled_embeddings)} samples")
+                print(
+                    "Voice profile loaded into default slot: "
+                    f"{self._profile_sample_count(self.DEFAULT_PROFILE)} samples"
+                )
             return True
 
         except Exception as e:
             print(f"Error loading voice profile: {e}")
+            self._sync_active_view()
             return False
 
     def clear_profile(self):
-        """Clear the current voice profile."""
-        self.enrolled_embeddings = []
-        self.reference_embedding = None
+        """Clear all voice profiles."""
+        self._profiles = {}
+        self._sync_active_view()
 
-        if self.profile_path.exists():
-            self.profile_path.unlink()
+        for path in (self.profile_path, self.multi_profile_path):
+            if path.exists():
+                path.unlink()
 
-        print("Voice profile cleared")
+        print("Voice profiles cleared")

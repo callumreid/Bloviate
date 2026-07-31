@@ -29,6 +29,17 @@ class NoiseSuppressor:
         self.noise_profile_samples = []
         self.max_noise_samples = 10
 
+        # Per-device calibrated gates (set by main when a device profile is
+        # ready); None means the static config gates apply.
+        self._dynamic_gates: Optional[tuple[float, float]] = None
+
+    def set_dynamic_gates(self, speech_min_rms: float, energy_fallback_rms: float):
+        """Install per-device calibrated speech gates."""
+        self._dynamic_gates = (float(speech_min_rms), float(energy_fallback_rms))
+
+    def clear_dynamic_gates(self):
+        self._dynamic_gates = None
+
     def suppress(self, audio: np.ndarray) -> np.ndarray:
         """Apply noise suppression to audio."""
         if not self.enabled:
@@ -139,6 +150,9 @@ class NoiseSuppressor:
         min_speech_frames = int(self.config['noise_suppression'].get('speech_min_frames', 3))
         min_speech_ratio = float(self.config['noise_suppression'].get('speech_min_ratio', 0.12))
         energy_fallback_rms = self.config['noise_suppression'].get('speech_energy_fallback_rms')
+        dynamic_gates = getattr(self, "_dynamic_gates", None)
+        if dynamic_gates is not None:
+            min_rms, energy_fallback_rms = dynamic_gates
         mic_sensitivity = float(self.config['noise_suppression'].get('mic_sensitivity', 50))
         allow_vad_below_rms = bool(
             self.config['noise_suppression'].get('speech_allow_vad_below_rms', False)

@@ -57,6 +57,7 @@ voice_fingerprint:
 # Noise Suppression
 noise_suppression:
   enabled: true
+  auto_calibrate: true  # Learn per-device noise floor/speech levels and derive gates
   mic_sensitivity: 50  # 0-100; higher lowers speech gates for quiet microphones
   stationary_noise_reduction: 0.7  # 0-1 (aggressive enough for noise, safer for ASR detail)
   vad_aggressiveness: 3  # 0-3, higher = more aggressive

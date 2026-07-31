@@ -136,6 +136,7 @@ class UISignals(QObject):
     update_status = pyqtSignal(str)
     update_command_status = pyqtSignal(str, str)
     update_cleanup_mode = pyqtSignal(str, str)
+    update_active_device = pyqtSignal(str)
     show_achievement_unlocks = pyqtSignal(object)
 
 
@@ -1494,6 +1495,7 @@ class BloviateUI(QMainWindow):
         self.signals.update_status.connect(self._update_status)
         self.signals.update_command_status.connect(self._update_command_status)
         self.signals.update_cleanup_mode.connect(self._update_cleanup_mode_from_runtime)
+        self.signals.update_active_device.connect(self._update_active_device)
         self.signals.show_achievement_unlocks.connect(self._show_achievement_unlocks)
 
         self._last_final_text = ""
@@ -4394,6 +4396,15 @@ class BloviateUI(QMainWindow):
                 self.ptt_overlay.set_rejected()
 
         self.match_score_label.setText(f"({score:.2f})")
+
+    def _update_active_device(self, device_name: str):
+        """The input device changed; flash it on the overlay and refresh Settings."""
+        if self.ptt_overlay:
+            self.ptt_overlay.show_message(f"Mic: {device_name}", state="mode", hold_ms=2600)
+        try:
+            self._refresh_audio_inputs()
+        except Exception:
+            pass
 
     def _update_status(self, message: str):
         """Update status message."""

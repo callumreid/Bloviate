@@ -131,6 +131,29 @@ class AudioCapture:
         if was_running:
             self.start()
 
+    def reinitialize(self):
+        """Re-scan audio devices and reopen the stream.
+
+        PortAudio caches the device list at initialize time, so following a
+        system default-device change requires a terminate/initialize cycle.
+        Must not be called while a recording is in flight.
+        """
+        was_running = self.stream is not None
+        self.stop()
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception as exc:
+            if getattr(self, "verbose_logs", False):
+                print(f"PortAudio reinitialize failed: {exc}")
+        self._native_rate = None
+        self._needs_resample = False
+        self._resample_up = 1
+        self._resample_down = 1
+        self.device_id = self._find_device()
+        if was_running:
+            self.start()
+
     def get_active_device_label(self) -> str:
         """Return a human-readable label for the active input selection."""
         if self.device_id is None:

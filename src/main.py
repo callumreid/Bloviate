@@ -760,6 +760,18 @@ class Bloviate:
             self.transcriber = Transcriber(self.config)
         self.ptt_handler = PTTHandler(self.config)
 
+        from device_calibration import DeviceCalibrationStore
+        from app_paths import app_support_dir
+
+        self.device_calibration = DeviceCalibrationStore(
+            app_support_dir() / "device_profiles.yaml",
+            self.config["audio"]["sample_rate"],
+        )
+        self.device_watcher = None
+        self._pending_device_change: Optional[str] = None
+        self.voice_fingerprint.set_active_device(self.audio_capture.get_active_device_label())
+        self._refresh_dynamic_gates(quiet=True)
+
         # Window management
         self.window_manager = None
         if self.config.get('window_management', {}).get('enabled', False):
@@ -851,6 +863,17 @@ class Bloviate:
             "profile_path": str(self.voice_fingerprint.profile_path),
             "next_sample_number": next_sample_number,
             "next_sample_phrase": next_sample_phrase,
+            "active_device": getattr(self.voice_fingerprint, "active_device", "")
+            or (
+                self.audio_capture.get_active_device_label()
+                if getattr(self, "audio_capture", None) is not None
+                else ""
+            ),
+            "device_profiles": (
+                self.voice_fingerprint.profile_summary()
+                if hasattr(self.voice_fingerprint, "profile_summary")
+                else {}
+            ),
         }
 
     def set_voice_mode(self, mode: str) -> tuple[bool, str]:
@@ -1518,6 +1541,63 @@ class Bloviate:
         thread.start()
         return thread
 
+    def _refresh_dynamic_gates(self, quiet: bool = False):
+        """Apply per-device calibrated speech gates when a profile is ready."""
+        ns_cfg = self.config.get("noise_suppression", {})
+        if not bool(ns_cfg.get("auto_calibrate", True)):
+            self.noise_suppressor.clear_dynamic_gates()
+            return
+        device = self.audio_capture.get_active_device_label()
+        gates = self.device_calibration.gates(device, ns_cfg.get("mic_sensitivity", 50))
+        if gates:
+            self.noise_suppressor.set_dynamic_gates(*gates)
+            if not quiet:
+                print(
+                    f"[DeviceProfile] Calibrated gates for '{device}': "
+                    f"min_rms={gates[0]:.5f} fallback={gates[1]:.5f}"
+                )
+        else:
+            self.noise_suppressor.clear_dynamic_gates()
+
+    def _on_default_input_changed(self, device_name: str):
+        """Watcher callback: the system default input device switched."""
+        pinned = str(self.config.get("audio", {}).get("device_name", "") or "").strip()
+        if pinned:
+            print(
+                f"[Audio] System default input is now '{device_name or 'unknown'}' "
+                f"(capture stays pinned to '{pinned}')"
+            )
+            return
+        self._pending_device_change = device_name or "system default"
+        if (
+            self.is_recording
+            or self.is_command_recording
+            or self.is_processing_recording
+            or self.is_processing_command
+        ):
+            print(f"[Audio] Default input changed to '{device_name}'; applying after current clip")
+            return
+        self._apply_pending_device_change()
+
+    def _apply_pending_device_change(self):
+        pending = self._pending_device_change
+        if not pending or self._shutdown_event.is_set():
+            return
+        self._pending_device_change = None
+        print(f"[Audio] Default input changed -> {pending}; restarting capture")
+
+        def worker():
+            self.audio_capture.reinitialize()
+            label = self.audio_capture.get_active_device_label()
+            self.voice_fingerprint.set_active_device(label)
+            self._refresh_dynamic_gates()
+            print(f"[Audio] Now capturing from: {label}")
+            if self.ui_window:
+                self.ui_window.signals.update_active_device.emit(label)
+                self.ui_window.signals.update_status.emit(f"Mic: {label}")
+
+        self._start_worker(worker)
+
     def _start_audio_capture_async(self, reason: str = "startup") -> bool:
         """Start microphone capture without blocking the UI thread."""
         if self._shutdown_event.is_set():
@@ -1762,6 +1842,7 @@ class Bloviate:
             self.process_recording(recorded_chunks)
         finally:
             self.is_processing_recording = False
+            self._apply_pending_device_change()
 
     def _setup_toggle_hotkey(self):
         """Register the optional toggle-dictation hotkey."""
@@ -2427,6 +2508,34 @@ class Bloviate:
             f"processed_speech={processed_speech['speech_frames']}/{processed_speech['frames']} "
             f"({processed_speech['speech_ratio']:.2%})"
         )
+        # Learn this device's floor/speech levels and refresh calibrated gates.
+        calibration = getattr(self, "device_calibration", None)
+        capture = getattr(self, "audio_capture", None)
+        if (
+            calibration is not None
+            and capture is not None
+            and bool(self.config.get("noise_suppression", {}).get("auto_calibrate", True))
+        ):
+            if calibration.update_from_clip(capture.get_active_device_label(), raw_audio):
+                self._refresh_dynamic_gates(quiet=True)
+
+        # Quiet-clip guard: a clip with no detectable speech must never reach a
+        # cloud model, where near-silence turns into hallucinated words.
+        has_speech_fn = getattr(self.noise_suppressor, "has_speech", None)
+        if not stream_text and callable(has_speech_fn) and not has_speech_fn(raw_audio):
+            print("✗ Too quiet: no speech detected, skipping transcription")
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit("Too quiet - no speech detected")
+            self._log_dictation_summary(
+                outcome="too_quiet",
+                duration_s=duration_s,
+                raw_rms=raw_speech['rms'],
+                similarity=-1.0,
+                provider="",
+                started_at=t_release,
+            )
+            return
+
         verify_on_raw = bool(
             self.config.get("voice_fingerprint", {}).get("verify_on_raw_audio", True)
         )
@@ -2749,10 +2858,19 @@ class Bloviate:
         self.backfill_achievements()
 
         self.audio_capture.register_callback(self.audio_callback)
-        if bool(self.config.get("audio", {}).get("start_on_launch", False)):
+        if bool(self.config.get("audio", {}).get("start_on_launch", True)):
             self._start_audio_capture_async("startup")
         elif self.ui_window:
             self.ui_window.signals.update_status.emit("Ready")
+
+        # Follow system default-input changes (desk moves, mic plug/unplug)
+        if sys.platform == "darwin":
+            from device_watcher import DefaultInputWatcher
+
+            self.device_watcher = DefaultInputWatcher(
+                on_change=self._on_default_input_changed
+            )
+            self.device_watcher.start()
 
         # Start PTT handler
         self._setup_toggle_hotkey()
@@ -2796,6 +2914,13 @@ class Bloviate:
                 self.ptt_handler.stop()
             except Exception as e:
                 print(f"Error stopping PTT handler: {e}")
+
+            # Stop the device watcher before tearing down audio
+            try:
+                if self.device_watcher:
+                    self.device_watcher.stop()
+            except Exception as e:
+                print(f"Error stopping device watcher: {e}")
 
             # Stop audio capture
             try:
