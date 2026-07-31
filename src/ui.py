@@ -162,6 +162,10 @@ class MenuBarIndicator:
         menu.addAction("Show Window", self._show_main_window)
         menu.addAction("Open Settings", self._open_settings)
         self.audio_menu = menu.addMenu("Input Device")
+        self.paste_rejected_action = menu.addAction(
+            "Paste Last Rejected Dictation", self._paste_last_rejected
+        )
+        self.paste_rejected_action.setEnabled(False)
         menu.addAction("Quit", self._quit_app)
         self.tray_icon.setContextMenu(menu)
         self.refresh_audio_inputs_menu()
@@ -218,6 +222,15 @@ class MenuBarIndicator:
         if self.parent and hasattr(self.parent, "switch_audio_input"):
             self.parent.switch_audio_input(device_name)
         self.refresh_audio_inputs_menu()
+
+    def _paste_last_rejected(self):
+        """Paste the most recent voice-rejected transcript anyway."""
+        if self.parent and getattr(self.parent, "paste_last_rejected", None):
+            self.parent.paste_last_rejected()
+
+    def set_rejected_paste_available(self, available: bool):
+        if hasattr(self, "paste_rejected_action"):
+            self.paste_rejected_action.setEnabled(bool(available))
 
     def _show_main_window(self):
         """Show the main window."""
@@ -1428,9 +1441,11 @@ class BloviateUI(QMainWindow):
         set_show_main_window_on_startup=None,
         set_startup_splash_enabled=None,
         set_terminal_startup_animation_enabled=None,
+        paste_last_rejected=None,
     ):
         super().__init__()
         self.config = config
+        self.paste_last_rejected = paste_last_rejected
         self.get_audio_inputs = get_audio_inputs
         self.set_audio_input = set_audio_input
         self.get_voice_profile_status = get_voice_profile_status
@@ -4455,8 +4470,12 @@ class BloviateUI(QMainWindow):
         self._mark_history_dirty()
         if self.menu_bar_indicator:
             self.menu_bar_indicator.set_rejected()
+            self.menu_bar_indicator.set_rejected_paste_available(True)
         if self.ptt_overlay:
             self.ptt_overlay.set_rejected()
+            self.ptt_overlay.show_message(
+                "Rejected - menu bar: paste anyway", state="rejected", hold_ms=4200
+            )
 
     def _show_achievement_unlocks(self, unlocks):
         """Show batched achievement unlocks and refresh the Settings grid."""
@@ -4759,6 +4778,7 @@ def create_ui(
     set_show_main_window_on_startup=None,
     set_startup_splash_enabled=None,
     set_terminal_startup_animation_enabled=None,
+    paste_last_rejected=None,
 ) -> tuple[QApplication, BloviateUI]:
     """
     Create and return the UI application and window.
@@ -4807,6 +4827,7 @@ def create_ui(
         set_show_main_window_on_startup=set_show_main_window_on_startup,
         set_startup_splash_enabled=set_startup_splash_enabled,
         set_terminal_startup_animation_enabled=set_terminal_startup_animation_enabled,
+        paste_last_rejected=paste_last_rejected,
     )
     splash_cfg = config.get("ui", {}).get("startup_splash", {})
     show_splash = bool(splash_cfg.get("enabled", True))

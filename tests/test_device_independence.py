@@ -263,3 +263,37 @@ class PerDeviceVoiceProfileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerAppModeTests(unittest.TestCase):
+    def _processor(self, app_modes):
+        from post_processor import PostProcessor
+
+        config = {
+            "post_processing": {
+                "mode": "verbatim",
+                "openai_enabled": False,
+                "app_modes": app_modes,
+            }
+        }
+        return PostProcessor(config)
+
+    def test_app_mode_exact_match(self):
+        processor = self._processor({"iTerm2": "coding"})
+        result = processor.process("git   status", target_app="iTerm2")
+        self.assertEqual(result.mode, "coding")
+
+    def test_app_mode_substring_match(self):
+        processor = self._processor({"chrome": "clean"})
+        result = processor.process("hello hello world", target_app="Google Chrome")
+        self.assertEqual(result.mode, "clean")
+
+    def test_app_mode_falls_back_to_global(self):
+        processor = self._processor({"Slack": "message"})
+        result = processor.process("some text", target_app="Obsidian")
+        self.assertEqual(result.mode, "verbatim")
+
+    def test_explicit_mode_beats_app_mode(self):
+        processor = self._processor({"iTerm2": "coding"})
+        result = processor.process("some text", target_app="iTerm2", mode="tidy")
+        self.assertEqual(result.mode, "tidy")

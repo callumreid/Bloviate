@@ -804,6 +804,7 @@ class Bloviate:
             0.0, float(self.config.get("ptt", {}).get("preroll_capture_s", 0.4) or 0.0)
         )
         self._dictation_started_at = 0.0
+        self._last_rejected_text = ""
         self._interim_update_interval_s = float(
             self.config.get("ui", {}).get("interim_update_interval_s", 0.15)
         )
@@ -1540,6 +1541,25 @@ class Bloviate:
             self._worker_threads.add(thread)
         thread.start()
         return thread
+
+    def paste_last_rejected_transcript(self) -> tuple[bool, str]:
+        """User override: output the most recent voice-rejected transcript anyway."""
+        text = self._last_rejected_text
+        if not text:
+            return False, "No rejected transcript to paste."
+        self.transcriber.output_text(text)
+        self._record_history(
+            text=text,
+            original_text=text,
+            mode="dictation",
+            post_processing_mode="verbatim",
+            provider="manual_override",
+            duration_s=0.0,
+            output_action="rejected_paste_override",
+        )
+        if self.ui_window:
+            self.ui_window.signals.update_status.emit("Pasted rejected transcript")
+        return True, "Pasted."
 
     def _refresh_dynamic_gates(self, quiet: bool = False):
         """Apply per-device calibrated speech gates when a profile is ready."""
@@ -2334,9 +2354,31 @@ class Bloviate:
             return text, provider_used
 
         text = None
-        final_text, final_provider_used = self.transcriber.transcribe_with_priority(
-            audio_for_transcription, final_provider_order, mode="dictation"
-        )
+        budget_s = float(transcription_cfg.get("final_pass_budget_s", 2.5) or 0.0)
+        if final_pass_mode == "hybrid" and stream_text and budget_s > 0:
+            # Streaming text is already good; the final pass may only improve it
+            # within a hard latency budget. Past the budget, ship what we have.
+            result: dict = {}
+
+            def _final_pass_worker():
+                result["value"] = self.transcriber.transcribe_with_priority(
+                    audio_for_transcription, final_provider_order, mode="dictation"
+                )
+
+            worker_thread = self._start_worker(_final_pass_worker)
+            if worker_thread is not None:
+                worker_thread.join(timeout=budget_s)
+            if "value" not in result:
+                print(
+                    f"[Final] Final pass exceeded {budget_s:.1f}s budget; "
+                    "using streaming text"
+                )
+                return stream_text, provider_used
+            final_text, final_provider_used = result["value"]
+        else:
+            final_text, final_provider_used = self.transcriber.transcribe_with_priority(
+                audio_for_transcription, final_provider_order, mode="dictation"
+            )
         if final_text:
             text = final_text
             provider_used = final_provider_used or provider_used
@@ -2580,6 +2622,7 @@ class Bloviate:
                     duration_s=len(raw_audio) / self.config["audio"]["sample_rate"],
                     output_action="voice_rejected_history_only",
                 )
+                self._last_rejected_text = output_text
                 if self.ui_window:
                     self.ui_window.signals.update_rejected_transcription.emit(output_text)
                     self.ui_window.signals.update_status.emit("Voice rejected; transcript saved to history")
@@ -2852,6 +2895,7 @@ class Bloviate:
             set_show_main_window_on_startup=self.set_show_main_window_on_startup,
             set_startup_splash_enabled=self.set_startup_splash_enabled,
             set_terminal_startup_animation_enabled=self.set_terminal_startup_animation_enabled,
+            paste_last_rejected=self.paste_last_rejected_transcript,
         )
         if self.talk_mode and self.ui_window:
             self.ui_window.signals.update_voice_match.emit(True, -1.0)
@@ -3556,6 +3600,14 @@ def main():
         action='store_true',
         help='Create ~/Applications/Bloviate.app so Bloviate can launch without a terminal'
     )
+    parser.add_argument(
+        '--suggest-terms-from-vault',
+        nargs='?',
+        const=str(Path.home() / "personal" / "Bronniopollis"),
+        default=None,
+        metavar='VAULT_PATH',
+        help='Mine an Obsidian vault for dictionary term suggestions and exit'
+    )
 
     args = parser.parse_args()
 
@@ -3592,6 +3644,22 @@ def main():
                 print(f"  - {term}")
         else:
             print(f"No new preferred terms added. File: {path}")
+        sys.exit(0)
+
+    if args.suggest_terms_from_vault:
+        from personal_dictionary import suggest_terms_from_vault
+
+        personal_dictionary = load_personal_dictionary(config)
+        existing = personal_dictionary.get("preferred_terms", [])
+        suggestions = suggest_terms_from_vault(
+            Path(args.suggest_terms_from_vault).expanduser(), existing
+        )
+        if not suggestions:
+            print("No new term suggestions found.")
+        else:
+            print(f"Top {len(suggestions)} suggested terms (add with --add-term):")
+            for term, count in suggestions:
+                print(f"  {count:>4}x  {term}")
         sys.exit(0)
 
     if args.show_personal_dictionary:

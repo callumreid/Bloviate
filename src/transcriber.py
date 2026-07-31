@@ -70,6 +70,17 @@ class Transcriber:
         )
         self._auto_prompt_cache = {}
 
+        # Local engine: MLX Whisper on Apple Silicon (fast), openai-whisper fallback.
+        self.local_engine = str(
+            self.transcription_config.get("local_engine", "auto") or "auto"
+        ).strip().lower()
+        self.mlx_model = str(
+            self.transcription_config.get("mlx_model", "mlx-community/whisper-large-v3-turbo")
+            or ""
+        ).strip()
+        self._mlx_module = None
+        self._mlx_probe_done = False
+
         # Keyboard controller for auto-paste
         self.keyboard = Controller()
         self.last_auto_paste_success = None
@@ -282,55 +293,84 @@ class Transcriber:
                 return text, normalized
         return None, None
 
-    def _transcribe_whisper(self, audio: np.ndarray, mode: str = "dictation") -> Optional[str]:
-        """Transcribe with local Whisper model, loading it lazily if needed."""
-        if self.model is None and self._whisper_load_thread:
-            self._whisper_load_thread.join(timeout=30)
-        if self.model is None:
-            self._load_whisper_model()
-        if self.model is None:
+    def _get_mlx_whisper(self):
+        """Probe for mlx-whisper once; None when unavailable or disabled."""
+        if self.local_engine not in {"auto", "mlx"} or not self.mlx_model:
             return None
-
+        if self._mlx_probe_done:
+            return self._mlx_module
+        self._mlx_probe_done = True
         try:
-            # Ensure audio is 1D
+            import mlx_whisper
+
+            self._mlx_module = mlx_whisper
+        except Exception as exc:
+            self._mlx_module = None
+            if self.local_engine == "mlx":
+                print(f"[Local] mlx-whisper unavailable ({exc}); using openai-whisper")
+        return self._mlx_module
+
+    def _transcribe_whisper(self, audio: np.ndarray, mode: str = "dictation") -> Optional[str]:
+        """Transcribe locally: MLX Whisper when available, openai-whisper fallback."""
+        try:
+            # Ensure audio is 1D float32, padded to at least 0.5 seconds
             if len(audio.shape) > 1:
                 audio = audio.squeeze()
-
-            # Ensure audio is float32
             if audio.dtype != np.float32:
                 audio = audio.astype(np.float32)
-
-            # Pad or trim audio to at least 0.5 seconds
             min_samples = int(self.sample_rate * 0.5)
             if len(audio) < min_samples:
                 audio = np.pad(audio, (0, min_samples - len(audio)))
-
             prompt = self._compose_prompt("whisper", mode=mode)
-
-            # Transcribe with Whisper
-            result = self.model.transcribe(
-                audio,
-                language=self.language,
-                fp16=False,  # Use FP32 for CPU compatibility
-                verbose=False,
-                initial_prompt=prompt or None,
-            )
-
-            text = result['text'].strip()
-
-            # Filter out empty or very short transcriptions
-            if len(text) < 2:
-                return None
-
-            # Apply custom dictionary corrections
-            if self.use_custom_dictionary:
-                text = self._apply_custom_dictionary(text)
-
-            return text
-
         except Exception as e:
             print(f"Transcription error: {e}")
             return None
+
+        text = None
+        mlx = self._get_mlx_whisper()
+        if mlx is not None:
+            try:
+                result = mlx.transcribe(
+                    audio,
+                    path_or_hf_repo=self.mlx_model,
+                    language=self.language,
+                    initial_prompt=prompt or None,
+                    verbose=None,
+                )
+                text = str(result.get("text", "")).strip()
+            except Exception as e:
+                print(f"[Local] MLX transcription failed ({e}); trying openai-whisper")
+                text = None
+
+        if text is None:
+            if self.model is None and self._whisper_load_thread:
+                self._whisper_load_thread.join(timeout=30)
+            if self.model is None:
+                self._load_whisper_model()
+            if self.model is None:
+                return None
+            try:
+                result = self.model.transcribe(
+                    audio,
+                    language=self.language,
+                    fp16=False,  # Use FP32 for CPU compatibility
+                    verbose=False,
+                    initial_prompt=prompt or None,
+                )
+                text = result['text'].strip()
+            except Exception as e:
+                print(f"Transcription error: {e}")
+                return None
+
+        # Filter out empty or very short transcriptions
+        if not text or len(text) < 2:
+            return None
+
+        # Apply custom dictionary corrections
+        if self.use_custom_dictionary:
+            text = self._apply_custom_dictionary(text)
+
+        return text
 
     def _load_whisper_model(self):
         """Lazily load the Whisper model on first use."""

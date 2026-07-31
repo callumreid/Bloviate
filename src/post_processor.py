@@ -43,7 +43,8 @@ class PostProcessor:
     def process(self, text: str, *, target_app: str = "", mode: Optional[str] = None) -> ProcessedTranscript:
         original = str(text or "").strip()
         cfg = self.config.get("post_processing", {})
-        configured_mode = str(mode or cfg.get("mode", "verbatim") or "verbatim").strip().lower()
+        resolved_mode = mode or self._mode_for_app(cfg, target_app) or cfg.get("mode", "verbatim")
+        configured_mode = str(resolved_mode or "verbatim").strip().lower()
         if configured_mode not in {"verbatim", "tidy", "clean", "coding", "message"}:
             configured_mode = "verbatim"
 
@@ -63,6 +64,25 @@ class PostProcessor:
             provider=provider,
             changed=deterministic != original,
         )
+
+    @staticmethod
+    def _mode_for_app(cfg: dict, target_app: str) -> Optional[str]:
+        """Resolve a per-app cleanup mode (exact match first, then substring)."""
+        app = str(target_app or "").strip().lower()
+        app_modes = cfg.get("app_modes")
+        if not app or not isinstance(app_modes, dict):
+            return None
+        normalized = {
+            str(key).strip().lower(): str(value).strip().lower()
+            for key, value in app_modes.items()
+            if str(key).strip() and str(value).strip()
+        }
+        if app in normalized:
+            return normalized[app]
+        for key, value in normalized.items():
+            if key in app:
+                return value
+        return None
 
     def _deterministic_cleanup(self, text: str, mode: str) -> str:
         if mode == "verbatim":

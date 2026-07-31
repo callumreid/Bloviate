@@ -10,6 +10,7 @@ for backward compatibility, but new writes go to `personal_dictionary.yaml`.
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
@@ -446,3 +447,58 @@ def save_personal_dictionary(
         yaml.safe_dump(payload, f, sort_keys=False, allow_unicode=False)
 
     return path
+
+
+_DATE_LIKE = re.compile(
+    r"^(?:\d{4}|\d{1,2}[-/ ]\d{1,2}|(?:January|February|March|April|May|June|July|August|"
+    r"September|October|November|December)\b.*\d{4})",
+    re.IGNORECASE,
+)
+_WIKILINK = re.compile(r"\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]")
+
+
+def suggest_terms_from_vault(
+    vault_path,
+    existing_terms,
+    *,
+    days: int = 90,
+    limit: int = 40,
+) -> List[tuple]:
+    """Mine recent Obsidian notes for [[WikiLink]] names worth adding as terms."""
+    import time as _time
+    from collections import Counter
+    from pathlib import Path as _Path
+
+    root = _Path(vault_path)
+    if not root.is_dir():
+        print(f"Vault not found: {root}")
+        return []
+
+    existing = {str(term).strip().lower() for term in existing_terms if str(term).strip()}
+    cutoff = _time.time() - days * 86400
+    counts: Counter = Counter()
+
+    for path in root.rglob("*.md"):
+        parts = set(path.parts)
+        if ".trash" in parts or ".obsidian" in parts:
+            continue
+        try:
+            if path.stat().st_mtime < cutoff:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for match in _WIKILINK.finditer(text):
+            name = " ".join(match.group(1).split())
+            if len(name) < 3 or len(name) > 40:
+                continue
+            if _DATE_LIKE.match(name) or re.search(r"\b(?:19|20)\d{2}\b", name):
+                continue
+            if " " not in name and name.islower():
+                # Plain lowercase words are ordinary vocabulary, not dictionary terms.
+                continue
+            if name.lower() in existing:
+                continue
+            counts[name] += 1
+
+    return counts.most_common(limit)

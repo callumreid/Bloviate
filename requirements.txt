@@ -9,6 +9,7 @@ speechbrain==1.0.0
 noisereduce>=3.0.0
 pyqt6>=6.5.0
 openai-whisper>=20231117
+mlx-whisper>=0.4; platform_machine == "arm64" and sys_platform == "darwin"
 pyyaml>=6.0
 webrtcvad>=2.0.10
 websocket-client>=1.7.0

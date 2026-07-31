@@ -73,7 +73,10 @@ transcription:
   model: "medium.en"  # Whisper primary: tiny.en, base.en, small.en, medium.en
   whisper_fallback_model: "medium.en"  # Accuracy-first local fallback
   preload_whisper_fallback: false  # Avoid heavy torch/Whisper CPU work during app startup
+  local_engine: "auto"  # auto = MLX Whisper on Apple Silicon, else openai-whisper
+  mlx_model: "mlx-community/whisper-large-v3-turbo"  # Downloads on first local use (~1.6GB)
   final_pass: "hybrid"  # hybrid=streaming interim + prerecorded final for best accuracy
+  final_pass_budget_s: 2.5  # Max seconds the final pass may add when streaming text exists
   hybrid_stream_fallback_min_rms: 0.0  # Raise for quiet mics to avoid pasting weak streaming fragments
   initial_prompt: ""  # Optional base prompt applied to OpenAI + Whisper transcriptions
   include_command_vocabulary: true  # Bias command-mode transcription toward built-in voice commands
@@ -109,6 +112,7 @@ achievements:
 # Post-processing / cleanup
 post_processing:
   mode: "verbatim"  # verbatim, tidy, clean, coding, message
+  app_modes: {}  # Per-app overrides, e.g. {"iTerm2": "coding", "Slack": "message"}
   openai_enabled: true  # Use AI cleanup when the mode allows it and an OpenAI key is configured
   openai_model: "gpt-4o"
   timeout_s: 12
