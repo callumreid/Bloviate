@@ -1,0 +1,13 @@
+# Copy to eval/manifest.yaml (gitignored) and fill in your recorded clips.
+# Record clips with: bloviate --record-eval-clip <name>
+# Cover the conditions that actually matter: each mic you use, quiet room,
+# office noise, whisper, and normal voice.
+- file: clips/builtin-quiet-normal.wav
+  golden: "run the integration tests and paste the results into the pull request"
+  tags: [builtin-mic, quiet, normal-voice]
+- file: clips/builtin-office-whisper.wav
+  golden: "git checkout dash b feature slash add voice metrics"
+  tags: [builtin-mic, office-noise, whisper]
+- file: clips/gooseneck-quiet-whisper.wav
+  golden: "kubectl get pods in the production namespace"
+  tags: [gooseneck, quiet, whisper]

@@ -218,6 +218,23 @@ class HistoryStore:
             day_entry["words"] += words
             day_entry["transcripts"] += 1
 
+        # Paste reliability over the most recent dictations (newest first).
+        reliability = {"window": 0, "pasted": 0, "copied": 0, "paste_failed": 0}
+        for row in reversed(rows):
+            if str(row["mode"] or "") != "dictation":
+                continue
+            if reliability["window"] >= 100:
+                break
+            reliability["window"] += 1
+            action = str(row["output_action"] or "").strip()
+            if action == "pasted":
+                reliability["pasted"] += 1
+            elif action == "paste_failed":
+                reliability["paste_failed"] += 1
+            else:
+                # copied/stdout plus legacy rows recorded before paste tracking
+                reliability["copied"] += 1
+
         wpm = int(round(total_words / (total_duration_s / 60.0))) if total_duration_s > 0 else 0
         app_rows = [
             {"name": name, **values}
@@ -250,6 +267,7 @@ class HistoryStore:
             "daily_usage": days,
             "current_streak_days": self._current_streak(day_usage, today),
             "longest_streak_days": self._longest_streak(day_usage),
+            "reliability": reliability,
         }
 
     def export_csv(self, path: Path, records: Optional[Iterable[TranscriptRecord]] = None) -> Path:

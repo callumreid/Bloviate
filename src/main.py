@@ -3000,6 +3000,58 @@ class Bloviate:
         return exit_code
 
 
+def record_eval_clip(config: dict, name: str, duration_s: float = 8.0) -> int:
+    """Record a WAV clip into eval/clips for the transcription eval harness."""
+    import wave
+
+    from audio_capture import AudioCapture
+
+    safe_name = re.sub(r"[^\w.-]+", "-", str(name).strip()).strip("-") or "clip"
+    clips_dir = project_root() / "eval" / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    path = clips_dir / f"{safe_name}.wav"
+
+    capture = AudioCapture(config)
+    capture.start()
+    print(f"Input: {capture.get_active_device_label()}")
+    print(f"Recording {duration_s:.0f}s to {path} — speak after the countdown.")
+    for i in (3, 2, 1):
+        print(f"  {i}...")
+        time.sleep(1)
+    print("  Recording now.")
+
+    capture.clear_queue()
+    capture.is_listening = True
+    chunks = []
+    deadline = time.time() + duration_s
+    while time.time() < deadline:
+        chunk = capture.get_audio_chunk(timeout=0.2)
+        if chunk is not None:
+            chunks.append(chunk)
+    capture.is_listening = False
+    capture.stop()
+
+    if not chunks:
+        print("No audio captured — check the microphone.")
+        return 1
+
+    audio = np.concatenate(chunks).flatten()
+    pcm = np.clip(audio * 32768, -32768, 32767).astype(np.int16)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(config["audio"]["sample_rate"])
+        wav.writeframes(pcm.tobytes())
+
+    rms = float(np.sqrt(np.mean(audio**2)))
+    print(f"Saved {path} ({len(audio)/config['audio']['sample_rate']:.1f}s, rms={rms:.5f})")
+    print("Add to eval/manifest.yaml:")
+    print(f"- file: clips/{path.name}")
+    print("  golden: \"<exactly what you said>\"")
+    print("  tags: [<mic>, <quiet|office-noise>, <whisper|normal-voice>]")
+    return 0
+
+
 def install_macos_launcher() -> int:
     """Create a small .app wrapper around the current bloviate command."""
     if sys.platform != "darwin":
@@ -3608,6 +3660,18 @@ def main():
         metavar='VAULT_PATH',
         help='Mine an Obsidian vault for dictionary term suggestions and exit'
     )
+    parser.add_argument(
+        '--record-eval-clip',
+        metavar='NAME',
+        default=None,
+        help='Record a WAV into eval/clips for the transcription eval harness and exit'
+    )
+    parser.add_argument(
+        '--record-seconds',
+        type=float,
+        default=8.0,
+        help='Duration for --record-eval-clip (default 8s)'
+    )
 
     args = parser.parse_args()
 
@@ -3645,6 +3709,9 @@ def main():
         else:
             print(f"No new preferred terms added. File: {path}")
         sys.exit(0)
+
+    if args.record_eval_clip:
+        sys.exit(record_eval_clip(config, args.record_eval_clip, args.record_seconds))
 
     if args.suggest_terms_from_vault:
         from personal_dictionary import suggest_terms_from_vault

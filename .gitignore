@@ -38,3 +38,7 @@ Thumbs.db
 custom_dictionary.yaml
 learned_terms.txt
 personal_dictionary.yaml
+
+# Personal eval audio
+eval/clips/
+eval/manifest.yaml

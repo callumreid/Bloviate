@@ -3541,6 +3541,20 @@ class BloviateUI(QMainWindow):
         self.insight_total_words_value.setText(self._format_int(total_words))
         self.insight_total_transcripts_label.setText(f"{self._format_int(total_transcripts)} saved transcripts")
 
+        reliability = insights.get("reliability") or {}
+        reliability_window = int(reliability.get("window", 0) or 0)
+        if reliability_window:
+            pasted = int(reliability.get("pasted", 0) or 0)
+            copied = int(reliability.get("copied", 0) or 0)
+            failed = int(reliability.get("paste_failed", 0) or 0)
+            summary = f"Reliability (last {reliability_window}): {pasted} pasted, {copied} copied"
+            if failed:
+                summary += f", {failed} paste-failed"
+                self.insights_status_label.setStyleSheet(self._settings_error_style)
+            else:
+                self.insights_status_label.setStyleSheet(self._settings_status_default_style)
+            self.insights_status_label.setText(summary)
+
         apps = list(insights.get("app_usage", []) or [])
         apps_total_words = sum(int(app.get("words", 0) or 0) for app in apps) or 1
         self.insight_apps_summary_label.setText(
