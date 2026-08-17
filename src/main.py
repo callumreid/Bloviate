@@ -1046,14 +1046,20 @@ class Bloviate:
 
     def get_model_options(self) -> dict:
         """Return provider/model options for settings UI."""
+        openai_base_url = str(self.config.get("openai", {}).get("base_url", "") or "")
         return {
             "providers": [provider.__dict__ for provider in self.model_registry.providers()],
             "whisper_models": [model.__dict__ for model in self.model_registry.models_for("whisper")],
             "deepgram_models": [model.__dict__ for model in self.model_registry.models_for("deepgram")],
-            "openai_models": [model.__dict__ for model in self.model_registry.models_for("openai")],
+            "openai_models": [
+                model.__dict__
+                for model in self.model_registry.models_for("openai", base_url=openai_base_url)
+            ],
             "cleanup_models": [
                 model.__dict__
-                for model in self.model_registry.models_for("openai", purpose="cleanup")
+                for model in self.model_registry.models_for(
+                    "openai", purpose="cleanup", base_url=openai_base_url
+                )
             ],
             "final_pass_modes": list(self.model_registry.FINAL_PASS_MODES),
             "post_processing_modes": list(self.model_registry.POST_PROCESSING_MODES),

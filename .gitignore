@@ -30,6 +30,7 @@ Thumbs.db
 
 # Secrets
 .env
+.env.*
 
 # Logs
 *.log

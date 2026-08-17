@@ -49,12 +49,38 @@ class ModelRegistry:
     OPENAI_TRANSCRIBE_MODELS = [
         ModelOption("gpt-4o-transcribe", "gpt-4o-transcribe", "Accuracy-first OpenAI STT"),
         ModelOption("gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe", "Lower-cost OpenAI STT"),
+        ModelOption("gpt-transcribe", "gpt-transcribe", "Newer OpenAI STT; weaker on spoken syntax"),
         ModelOption("whisper-1", "whisper-1", "OpenAI-hosted Whisper"),
+    ]
+
+    # OpenRouter exposes many vendors behind one OpenAI-compatible key. Slugs are
+    # vendor-prefixed and must be sent verbatim. Note: OpenRouter accepts but
+    # ignores `prompt`, so dictionary bias does not reach these models.
+    OPENROUTER_TRANSCRIBE_MODELS = [
+        ModelOption(
+            "qwen/qwen3-asr-flash-2026-02-10",
+            "qwen3-asr-flash",
+            "Best spoken-syntax rendering (dash b -> -b, slash -> /)",
+        ),
+        ModelOption("openai/gpt-4o-transcribe", "gpt-4o-transcribe", "Strong syntax rendering, pricier"),
+        ModelOption("microsoft/mai-transcribe-1.5", "mai-transcribe-1.5", "Good accuracy, mid latency"),
+        ModelOption("openai/whisper-large-v3-turbo", "whisper-large-v3-turbo", "Cheapest usable; literal dash/slash"),
+        ModelOption("mistralai/voxtral-mini-transcribe", "voxtral-mini-transcribe", "Fast, literal dash/slash"),
+        ModelOption("deepgram/nova-3", "nova-3", "Lowest latency; weaker on technical terms"),
+        ModelOption("nvidia/parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v3", "Very fast, mangles technical terms"),
+        ModelOption("openai/gpt-transcribe", "gpt-transcribe", "Newer OpenAI STT; weaker on spoken syntax"),
+        ModelOption("x-ai/grok-stt-1.0", "grok-stt-1.0", "Mid accuracy"),
+        ModelOption("google/chirp-3", "chirp-3", "Weakest on technical terms; most expensive"),
     ]
 
     OPENAI_CLEANUP_MODELS = [
         ModelOption("gpt-4o", "gpt-4o", "Stable high-quality cleanup model"),
         ModelOption("gpt-4o-mini", "gpt-4o-mini", "Lower-cost cleanup model"),
+    ]
+
+    OPENROUTER_CLEANUP_MODELS = [
+        ModelOption("openai/gpt-4o", "gpt-4o", "Stable high-quality cleanup model"),
+        ModelOption("openai/gpt-4o-mini", "gpt-4o-mini", "Lower-cost cleanup model"),
     ]
 
     FINAL_PASS_MODES = ["hybrid", "prerecorded", "streaming"]
@@ -67,10 +93,20 @@ class ModelRegistry:
     def provider_values(self) -> list[str]:
         return [provider.value for provider in self.PROVIDERS]
 
-    def models_for(self, provider: str, *, purpose: str = "transcription") -> list[ModelOption]:
+    def models_for(
+        self,
+        provider: str,
+        *,
+        purpose: str = "transcription",
+        base_url: str = "",
+    ) -> list[ModelOption]:
         normalized = self.normalize_provider(provider)
         if normalized == "deepgram":
             return list(self.DEEPGRAM_MODELS)
+        if normalized == "openai" and self.is_openrouter(base_url):
+            if purpose == "cleanup":
+                return list(self.OPENROUTER_CLEANUP_MODELS)
+            return list(self.OPENROUTER_TRANSCRIBE_MODELS)
         if normalized == "openai" and purpose == "cleanup":
             return list(self.OPENAI_CLEANUP_MODELS)
         if normalized == "openai":
@@ -105,6 +141,11 @@ class ModelRegistry:
             seen.add(normalized)
             priority.append(normalized)
         return priority or ["openai", "deepgram", "whisper"]
+
+    @staticmethod
+    def is_openrouter(base_url: str) -> bool:
+        """OpenRouter is OpenAI-compatible, so it rides the openai provider path."""
+        return "openrouter.ai" in str(base_url or "").lower()
 
     @staticmethod
     def normalize_provider(provider: str) -> str:

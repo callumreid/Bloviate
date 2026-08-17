@@ -90,7 +90,7 @@ achievements:
   enabled: true
   celebrations: "subtle"  # full, subtle, off
   ai_analysis_enabled: false  # Sends transcript text to OpenAI only when explicitly enabled
-  ai_analysis_model: "gpt-4o"
+  ai_analysis_model: "openai/gpt-4o"
   ai_analysis_timeout_s: 12
   backfill_on_startup: true
   settings_table_limit: 24
@@ -99,7 +99,7 @@ achievements:
 post_processing:
   mode: "verbatim"  # verbatim, clean, coding, message
   openai_enabled: true  # Use AI cleanup when the mode allows it and an OpenAI key is configured
-  openai_model: "gpt-4o"
+  openai_model: "openai/gpt-4o"
   timeout_s: 12
   temperature: 0.1
 
@@ -144,12 +144,15 @@ deepgram:
     - "Claude"
   extra_query_params: {}
 
-# OpenAI speech-to-text (accuracy-first final pass)
+# OpenAI-compatible speech-to-text (accuracy-first final pass).
+# Pointed at OpenRouter for model choice; swap base_url/api_key_env back to
+# api.openai.com/v1 + OPENAI_API_KEY to use OpenAI directly.
+# OpenRouter ignores `prompt`, so dictionary bias only reaches Deepgram.
 openai:
-  model: "gpt-4o-transcribe"
-  # Set your API key via environment variable: export OPENAI_API_KEY="your-key"
-  api_key_env: "OPENAI_API_KEY"
-  base_url: "https://api.openai.com/v1"
+  model: "qwen/qwen3-asr-flash-2026-02-10"
+  # Set your API key via environment variable: export OPENROUTER_API_KEY="your-key"
+  api_key_env: "OPENROUTER_API_KEY"
+  base_url: "https://openrouter.ai/api/v1"
   timeout_s: 30
   response_format: "json"
   temperature: 0
