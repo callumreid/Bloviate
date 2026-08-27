@@ -149,7 +149,11 @@ deepgram:
 # api.openai.com/v1 + OPENAI_API_KEY to use OpenAI directly.
 # OpenRouter ignores `prompt`, so dictionary bias only reaches Deepgram.
 openai:
-  model: "qwen/qwen3-asr-flash-2026-02-10"
+  # 2026-08-26: switched from qwen/qwen3-asr-flash. On the whisper-clone eval
+  # (STT_RESEARCH_2026-08-26.md) qwen won on clean audio but collapsed under
+  # office noise; mai-transcribe-1.5 held up ~3x better in noise. Same OpenRouter
+  # multipart path, so this is a drop-in model swap.
+  model: "microsoft/mai-transcribe-1.5"
   # Set your API key via environment variable: export OPENROUTER_API_KEY="your-key"
   api_key_env: "OPENROUTER_API_KEY"
   base_url: "https://openrouter.ai/api/v1"
