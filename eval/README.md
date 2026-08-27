@@ -29,3 +29,21 @@ venv/bin/python eval/run_eval.py --tag builtin-mic
 
 Cloud providers need `DEEPGRAM_API_KEY` / `OPENAI_API_KEY` in the environment.
 Run it before and after any change to gates, gain, models, or prompts.
+
+## Whisper-clone / model comparison (added 2026-08-26)
+
+Beyond WER on your own recordings, the eval can compare STT models across the
+noisy conditions Bloviate actually runs in, and can vet a "whisper" voice clone
+before you trust it.
+
+- `validate_acoustics.py <clip.wav>` — is a clip true whisper (no pitch) or
+  breathy phonation? Run it on any voice-clone output first. Needs
+  `praat-parselmouth`.
+- `whisper_conditions.py` — degrade a clean clip into runtime conditions
+  (quiet, office noise, with/without Bloviate's spectral gate + AGC).
+- `providers.py` — Deepgram / OpenRouter / local-MLX adapters (keys from env).
+- `wer.py` — dictation-aware WER (spoken syntax folded to written form).
+- `compare_stt.py clips.json --conditions clean office_app office_app_nogate` —
+  the driver; prints a model × condition WER table.
+
+See `STT_RESEARCH_2026-08-26.md` for findings and the two config changes to A/B.
