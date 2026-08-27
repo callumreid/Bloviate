@@ -64,6 +64,11 @@ transcription:
   model: "medium.en"  # Whisper primary: tiny.en, base.en, small.en, medium.en
   whisper_fallback_model: "medium.en"  # Accuracy-first local fallback
   final_pass: "hybrid"  # hybrid=streaming interim + prerecorded final for best accuracy
+  final_pass_budget_s: 8.0  # Max wait for the accuracy final pass before shipping the
+    # streaming interim. join() returns as soon as the final pass finishes (mai-transcribe
+    # is ~1.7s), so this adds no latency in the normal case; it only stops discarding the
+    # better final text when a call runs slow. Was 2.5s, which dropped the final pass on a
+    # chunk of dictations. 0 = always wait (bounded by openai.timeout_s).
   initial_prompt: ""  # Optional base prompt applied to OpenAI + Whisper transcriptions
   include_command_vocabulary: true  # Bias command-mode transcription toward built-in voice commands
   prompt_max_terms: 40  # Keep automatic prompting concise so it helps more than it over-biases
@@ -149,7 +154,11 @@ deepgram:
 # api.openai.com/v1 + OPENAI_API_KEY to use OpenAI directly.
 # OpenRouter ignores `prompt`, so dictionary bias only reaches Deepgram.
 openai:
-  model: "qwen/qwen3-asr-flash-2026-02-10"
+  # 2026-08-26: switched from qwen/qwen3-asr-flash. On the whisper-clone eval
+  # (STT_RESEARCH_2026-08-26.md) qwen won on clean audio but collapsed under
+  # office noise; mai-transcribe-1.5 held up ~3x better in noise. Same OpenRouter
+  # multipart path, so this is a drop-in model swap.
+  model: "microsoft/mai-transcribe-1.5"
   # Set your API key via environment variable: export OPENROUTER_API_KEY="your-key"
   api_key_env: "OPENROUTER_API_KEY"
   base_url: "https://openrouter.ai/api/v1"
