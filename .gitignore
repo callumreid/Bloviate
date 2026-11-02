@@ -43,3 +43,5 @@ personal_dictionary.yaml
 # Personal eval audio
 eval/clips/
 eval/manifest.yaml
+eval/finetune_data/
+
