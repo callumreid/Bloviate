@@ -231,7 +231,19 @@ class Transcriber:
                 if match_mode == 'whole_word':
                     pattern = re.compile(rf"(?<!\w){escaped}(?!\w)", re.IGNORECASE)
                 else:
-                    pattern = re.compile(escaped, re.IGNORECASE)
+                    # Guard against prefix/suffix collisions when `variation` is a
+                    # substring of `phrase` itself (e.g. 'san fran' inside
+                    # 'San Francisco' or 'Cole Amic' inside 'Cole Amick') and avoid
+                    # firing when `variation` only differs by case from an already
+                    # exact `phrase`.
+                    if variation.lower() == phrase.lower():
+                        pattern = re.compile(rf"(?<!\w){escaped}(?!\w)", re.IGNORECASE)
+                        if not any(m.group(0) != phrase for m in pattern.finditer(corrected)):
+                            continue
+                        corrected = pattern.sub(phrase, corrected)
+                        print(f"[Dictionary] Corrected '{variation}' → '{phrase}'")
+                        continue
+                    pattern = re.compile(rf"(?<!\w){escaped}(?!\w)", re.IGNORECASE)
 
                 # Check if this variation exists in the text
                 if pattern.search(corrected):
@@ -330,11 +342,14 @@ class Transcriber:
         mlx = self._get_mlx_whisper()
         if mlx is not None:
             try:
+                is_local_finetuned = Path(self.mlx_model).exists()
+                mlx_prompt = (self._base_initial_prompt or None) if is_local_finetuned else (prompt or None)
                 result = mlx.transcribe(
                     audio,
                     path_or_hf_repo=self.mlx_model,
                     language=self.language,
-                    initial_prompt=prompt or None,
+                    initial_prompt=mlx_prompt,
+                    temperature=0.0,
                     verbose=None,
                 )
                 text = str(result.get("text", "")).strip()
