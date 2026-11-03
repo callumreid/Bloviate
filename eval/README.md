@@ -47,3 +47,9 @@ before you trust it.
   the driver; prints a model × condition WER table.
 
 See `STT_RESEARCH_2026-08-26.md` for findings and the two config changes to A/B.
+
+## Whisper LoRA Fine-Tuning on MLX (added 2026-11-02)
+
+- `build_whisper_dataset.py` & `expand_whisper_dataset_v2.py` — mine a personal training + held-out eval corpus from `personal_dictionary.yaml`, `history.sqlite`, Obsidian notes, spoken acronym pairs, and CLI/git syntax pairs (`eval/finetune_data/corpus.json`, gitignored).
+- `synthesize_and_augment.py` — synthesize clips via Gradium HTTP TTS (`GRADIUM_API_KEY`) and build multi-condition training variants (`quiet`, `office_app_nogate`, `office_app`, plus true 0-F0 `lpc_whisper_vocode` unvoiced whisper variants).
+- `train_whisper_lora_mlx.py` — fine-tune `mlx-community/whisper-large-v3-turbo` on Apple Silicon with LoRA + SpecAugment while keeping cross-attention Q/K alignment heads frozen, then merge and export a drop-in `mlx_whisper` checkpoint.

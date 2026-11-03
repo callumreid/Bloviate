@@ -344,15 +344,21 @@ class Transcriber:
             try:
                 is_local_finetuned = Path(self.mlx_model).exists()
                 mlx_prompt = (self._base_initial_prompt or None) if is_local_finetuned else (prompt or None)
+                mlx_audio = self._normalize_audio_for_int16(audio)
                 result = mlx.transcribe(
-                    audio,
+                    mlx_audio,
                     path_or_hf_repo=self.mlx_model,
                     language=self.language,
                     initial_prompt=mlx_prompt,
-                    temperature=0.0,
+                    temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+                    compression_ratio_threshold=2.2,
+                    condition_on_previous_text=False,
+                    no_speech_threshold=0.5,
                     verbose=None,
                 )
                 text = str(result.get("text", "")).strip()
+                # Strip any trailing repeated clause caused by end-of-clip PTT release silence
+                text = self._strip_trailing_repetition(text)
             except Exception as e:
                 print(f"[Local] MLX transcription failed ({e}); trying openai-whisper")
                 text = None
@@ -385,6 +391,25 @@ class Transcriber:
         if self.use_custom_dictionary:
             text = self._apply_custom_dictionary(text)
 
+        return text
+
+    @staticmethod
+    def _strip_trailing_repetition(text: str) -> str:
+        """Remove trailing autoregressive loop hallucinations (e.g. 'and I'm going to run a test of me' x20)."""
+        if not text:
+            return text
+        repeat_pattern = re.compile(
+            r"(\b[\w']+(?:\s+[\w']+){2,10})(?:\s*,?\s*\1){2,}",
+            flags=re.IGNORECASE,
+        )
+        m = repeat_pattern.search(text)
+        if m:
+            before = text[: m.start()].rstrip(" ,;-")
+            last_punct = max(before.rfind("."), before.rfind("!"), before.rfind("?"))
+            if last_punct >= 0:
+                return before[: last_punct + 1].strip()
+            if before:
+                return before + "."
         return text
 
     def _load_whisper_model(self):

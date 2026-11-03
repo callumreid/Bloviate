@@ -42,13 +42,14 @@ class NoiseSuppressor:
 
     def suppress(self, audio: np.ndarray) -> np.ndarray:
         """Apply noise suppression to audio."""
-        if not self.enabled:
+        if not self.enabled or float(self.stationary_reduction or 0.0) <= 0.0:
             return audio
 
         # Ensure audio is in the right format
         audio = audio.squeeze()
 
-        # Apply spectral gating with noisereduce
+        # Apply spectral gating with noisereduce (single-threaded to avoid
+        # spawning joblib loky workers inside the macOS .app bundle)
         try:
             reduced = nr.reduce_noise(
                 y=audio,
@@ -56,6 +57,7 @@ class NoiseSuppressor:
                 stationary=True,
                 prop_decrease=self.stationary_reduction,
                 thresh_n_mult_nonstationary=2,
+                n_jobs=1,
             )
         except Exception as e:
             print(f"Noise reduction error: {e}")

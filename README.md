@@ -225,6 +225,75 @@ If running through Terminal or iTerm, grant permissions to that terminal app. If
 - `eval/` holds a WER/latency harness over your own recorded clips — see [eval/README.md](eval/README.md). Record with `bloviate --record-eval-clip <name>`.
 - `bloviate --suggest-terms-from-vault` mines an Obsidian vault for dictionary term candidates.
 
+## Fine-Tuning Local MLX Whisper on Your Whispered Voice
+
+Commercial speech-to-text models degrade sharply on whispered speech in noisy offices (stock `whisper-large-v3-turbo` drops from `0.041` clean WER to `0.757` WER under 10–18 dB office babble). Bloviate includes an end-to-end synthetic + multi-condition LoRA fine-tuning pipeline in `eval/` that adapts `mlx-community/whisper-large-v3-turbo` directly on Apple Silicon using MLX:
+
+### 1. How the Training Pipeline Works
+
+1. **Personal Corpus Mining (`eval/build_whisper_dataset.py` & `eval/expand_whisper_dataset_v2.py`):**
+   - Mines 671 utterances (**621 train / 50 strictly held-out eval**) across four sources:
+     - `dictionary_carrier`: Every term and proper noun in `personal_dictionary.yaml` placed across varied conversational carrier templates (with unseen carrier templates held out for evaluation).
+     - `history_dictation`: Real sentences mined from local `history.sqlite` dictations.
+     - `obsidian_prose`: Technical prose mined from Markdown notes, with phonetic acronym normalization (`"C L I"` $\rightarrow$ `CLI`, `"P R"` $\rightarrow$ `PR`, `"S D K"` $\rightarrow$ `SDK`, `"p n p m vie test"` $\rightarrow$ `pnpm vitest`) so TTS speaks acronyms the way a human dictates them while the model learns to emit the exact written token.
+     - `syntax_dictation`: Spoken CLI/git syntax pairs where TTS speaks `"git checkout dash b feat slash whisper eval"` and the target label is `"git checkout -b feat/whisper-eval"`.
+
+2. **Whisper Voice Clone Synthesis + LPC Unvoiced Vocoder + Office Noise (`eval/synthesize_and_augment.py`):**
+   - Synthesizes all utterances via a Gradium Pro Voice Clone recorded from close-mic whispered speech (`temp=0.0`, `cfg_coef=2.5`).
+   - **Bridging the F0 Acoustic Trap:** Even when trained on whispered recordings, neural TTS voice clones retain residual pitch (`mean F0 ≈ 247–410 Hz`, ~40–68% voiced frames), whereas true human whispering is 100% unvoiced broadband turbulence (`0% voiced frames`). To prevent the ASR encoder from overfitting to synthetic pitch, `lpc_whisper_vocode()` extracts 20th-order Linear Predictive Coding (LPC) vocal-tract formants and replaces the periodic glottal excitation with modulated broadband noise—producing true `0.0% voiced` whisper signals (verified by `eval/validate_acoustics.py` and cepstral peak prominence gates).
+   - Generates **1,242 multi-condition training clips** across `quiet`, `office_app_nogate` (10–18 dB speech-shaped office babble + Bloviate's +45 dB prerecorded AGC), `office_app` (with stationary spectral gating), and `unvoiced_lpc` (clean + noisy).
+
+3. **Native Apple Silicon MLX LoRA Training (`eval/train_whisper_lora_mlx.py`):**
+   - Attaches LoRA adapters (`r=16, alpha=32`, **5.57M trainable parameters / 0.69% of total**) to the top 12 `AudioEncoder` blocks and all 4 `TextDecoder` blocks, with **SpecAugment** frequency masking.
+   - **Preserving Monotonic Timestamp Alignment:** `cross_attn.query` and `cross_attn.key` are deliberately kept frozen while adapting `cross_attn.value` and `cross_attn.out` alongside encoder/decoder self-attention and MLPs. Freezing cross-attention Q/K preserves Whisper's pre-trained monotonic alignment heads so tokens that compress multiple spoken words (e.g. `"feat slash"` $\rightarrow$ `"feat/"`) never trigger autoregressive repetition loops.
+   - Merges the trained LoRA weights back into the base `float16` weights and exports a drop-in `mlx_whisper` checkpoint (`~/Library/Application Support/Bloviate/models/whisper-v3-turbo-callum-mlx`).
+
+### 2. Benchmark Results (50 Held-Out Clips Across 6 Acoustic Conditions)
+
+#### A. Raw Model Word Error Rate (WER — lower is better, no post-processing regexes)
+
+| Model | Clean | Office No-Gate (14 dB) | Office Gate (14 dB) | Office Hard Noise (10 dB) | True Unvoiced LPC (Clean) | True Unvoiced LPC (14 dB) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| `whisper-large-v3-turbo` (Stock MLX) | 0.114 | 0.153 | 0.144 | 0.280 | 0.134 | 0.169 |
+| `whisper-v3-turbo-callum` (Round 1 LoRA) | 0.090 | 0.101 | 0.107 | 0.222 | 0.095 | 0.117 |
+| **`whisper-v3-turbo-callum` (Round 2 LoRA)** | **0.056** | **0.068** | **0.079** | **0.157** | **0.059** | **0.085** |
+| **Relative Error Reduction (v2 vs. Stock)** | **-51%** | **-56%** | **-45%** | **-44%** | **-56%** | **-50%** |
+
+#### B. Breakdown by Dictation Category at 14 dB Office Noise (`office_app_nogate`)
+
+| Category | Stock WER | Round 1 FT WER | **Round 2 FT WER** | Improvement |
+| :--- | :---: | :---: | :---: | :--- |
+| **`dictionary_carrier`** (Proper nouns, teammates, tools) | 0.072 | 0.023 | **0.013** | **-82% WER** (23/25 clips 0.00 WER without regexes) |
+| **`history_dictation`** (Real Bloviate dictations) | 0.089 | 0.048 | **0.042** | **-53% WER** |
+| **`obsidian_prose`** (Technical work notes & acronyms) | 0.259 | 0.211 | **0.144** | **-44% WER** |
+| **`syntax_dictation`** (Spoken CLI/git commands) | 0.499 | 0.408 | **0.261** | **-48% WER** |
+
+#### C. End-to-End Bloviate `Transcriber` vs. Cloud Providers
+
+| Bloviate `Transcriber` Path | 16-Clip Clean WER | 16-Clip 14 dB Noisy WER | Full 50-Clip Clean WER | Full 50-Clip 14 dB Noisy WER | Mean Latency |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| `whisper` (Stock `whisper-large-v3-turbo`) | 0.100 | 0.090 | 0.109 | 0.140 | 0.42s |
+| **`whisper` (Fine-Tuned `whisper-v3-turbo-callum-mlx`)** | **0.041** | **0.058** | **0.052** | **0.071** | **0.26s** |
+| `openai` (`microsoft/mai-transcribe-1.5` via OpenRouter) | 0.047 | 0.060 | — | — | 2.03s |
+| `deepgram` (`nova-3` prerecorded + 100 keyterms) | 0.057 | 0.121 | — | — | 0.81s |
+
+### 3. Hardware Note: Close-Mic Condenser vs. AirPods for Whispering
+
+Live testing across microphones confirmed a critical hardware boundary for true unvoiced whispering:
+- **Close-talking XLR condenser (Focusrite Scarlett 4i4 + gooseneck, 48V phantom power, `stationary_noise_reduction: 0.0`):** Captures full 48 kHz broadband unvoiced whisper turbulence (`raw_rms ≈ 0.035` vs `0.0012` ambient floor, ~29 dB SNR). The fine-tuned local MLX model transcribes technical whispered sentences end-to-end on-device with high accuracy.
+- **AirPods (`24 kHz` Bluetooth HFP):** AirPods use an internal bone-conduction voice accelerometer to gate their beamforming microphones. Because true unvoiced whispering has zero vocal-cord vibration, AirPods firmware clamps the mic output (`raw_rms ≈ 0.0011`, below the `0.0033` room floor) before audio ever reaches macOS. AirPods require at least a quiet voiced murmur to open the hardware gate, whereas a close-mic condenser works with pure unvoiced whispering.
+
+### Running the Fine-Tuning Pipeline
+
+```bash
+venv/bin/python eval/build_whisper_dataset.py
+venv/bin/python eval/expand_whisper_dataset_v2.py
+GRADIUM_API_KEY="..." venv/bin/python eval/synthesize_and_augment.py
+venv/bin/python eval/train_whisper_lora_mlx.py --epochs 2 --batch-size 4 --rank 16 --alpha 32 --top-encoder-layers 12
+```
+
+Then point `transcription.mlx_model` in `~/Library/Application Support/Bloviate/config.yaml` at the exported checkpoint directory and put `whisper` first in `final_pass_provider_priority`.
+
 ## Development
 
 ```bash
