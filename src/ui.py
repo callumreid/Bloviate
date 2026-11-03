@@ -1978,6 +1978,9 @@ class BloviateUI(QMainWindow):
         self.command_hotkey_edit = QLineEdit(
             self._config_text("window_management", "command_hotkey", "<ctrl>+<cmd>")
         )
+        self.command_toggle_hotkey_edit = QLineEdit(
+            self._config_text("window_management", "command_toggle_hotkey", "<ctrl>+<cmd>+<shift>")
+        )
         self.window_prefix_hotkey_edit = QLineEdit(
             self._config_text("window_management", "hotkey_prefix", "<ctrl>+<cmd>")
         )
@@ -1996,6 +1999,7 @@ class BloviateUI(QMainWindow):
             self.mode_cycle_tap_count_edit: "3",
             self.mode_cycle_tap_window_edit: "650",
             self.command_hotkey_edit: "<ctrl>+<cmd>",
+            self.command_toggle_hotkey_edit: "<ctrl>+<cmd>+<shift>",
             self.window_prefix_hotkey_edit: "<ctrl>+<cmd>",
             self.voice_command_prefixes_edit: "run command, screen, window, desktop",
         }
@@ -2009,6 +2013,7 @@ class BloviateUI(QMainWindow):
         hotkey_layout.addRow("Mode tap count:", self.mode_cycle_tap_count_edit)
         hotkey_layout.addRow("Mode tap window ms:", self.mode_cycle_tap_window_edit)
         hotkey_layout.addRow("Command PTT:", self.command_hotkey_edit)
+        hotkey_layout.addRow("Command toggle:", self.command_toggle_hotkey_edit)
         hotkey_layout.addRow("Window prefix:", self.window_prefix_hotkey_edit)
         hotkey_layout.addRow("Voice prefixes:", self.voice_command_prefixes_edit)
         hotkey_actions = QHBoxLayout()
@@ -2922,6 +2927,7 @@ class BloviateUI(QMainWindow):
             "ptt.mode_cycle_tap_count": mode_tap_count,
             "ptt.mode_cycle_tap_window_ms": mode_tap_window_ms,
             "window_management.command_hotkey": self.command_hotkey_edit.text().strip(),
+            "window_management.command_toggle_hotkey": self.command_toggle_hotkey_edit.text().strip(),
             "window_management.hotkey_prefix": self.window_prefix_hotkey_edit.text().strip(),
             "window_management.voice_command_prefixes": voice_prefixes,
         }
@@ -2940,6 +2946,9 @@ class BloviateUI(QMainWindow):
             ]
             self.config.setdefault("window_management", {})["command_hotkey"] = updates[
                 "window_management.command_hotkey"
+            ]
+            self.config.setdefault("window_management", {})["command_toggle_hotkey"] = updates[
+                "window_management.command_toggle_hotkey"
             ]
             self.config.setdefault("window_management", {})["hotkey_prefix"] = updates[
                 "window_management.hotkey_prefix"

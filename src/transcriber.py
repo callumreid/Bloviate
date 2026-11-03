@@ -359,6 +359,7 @@ class Transcriber:
                 text = str(result.get("text", "")).strip()
                 # Strip any trailing repeated clause caused by end-of-clip PTT release silence
                 text = self._strip_trailing_repetition(text)
+                text = self._collapse_degenerate_repetition(text)
             except Exception as e:
                 print(f"[Local] MLX transcription failed ({e}); trying openai-whisper")
                 text = None
@@ -411,6 +412,32 @@ class Transcriber:
             if before:
                 return before + "."
         return text
+
+    @staticmethod
+    def _collapse_degenerate_repetition(text: str) -> str:
+        """Collapse short units (1-8 chars, spaces allowed) repeated consecutively
+        >=6 times into a single occurrence, e.g. 'iesiesies…' hallucinations.
+        Returns "" when the whole result is just the degenerate fragment."""
+        if not text:
+            return text
+        pattern = re.compile(r"(.{1,8}?)(?:\s*\1){5,}", flags=re.DOTALL)
+
+        def _valid_unit(match) -> bool:
+            unit = match.group(1).strip()
+            return bool(unit) and not unit.isdigit()
+
+        if not any(_valid_unit(m) for m in pattern.finditer(text)):
+            return text
+        residual = pattern.sub(
+            lambda m: "" if _valid_unit(m) else m.group(0),
+            text,
+        ).strip()
+        if len(residual) < 4:
+            return ""
+        return pattern.sub(
+            lambda m: m.group(1) if _valid_unit(m) else m.group(0),
+            text,
+        ).strip()
 
     def _load_whisper_model(self):
         """Lazily load the Whisper model on first use."""

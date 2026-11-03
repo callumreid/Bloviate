@@ -193,6 +193,105 @@ class CommandAndHotkeyTests(unittest.TestCase):
         self.assertEqual(events, ["toggle"])
         handler.stop()
 
+    def test_command_toggle_chord_does_not_fire_shorter_command_hotkey(self):
+        handler = PTTHandler(
+            {
+                "ptt": {
+                    "hotkey": "<cmd>+<option>",
+                    "press_delay_ms": 80,
+                }
+            }
+        )
+        events = []
+        handler.listener = FakeListener()
+        handler._is_started = True
+        handler.add_hotkey(
+            "window_command_mode",
+            "<ctrl>+<cmd>",
+            on_press=lambda: events.append("command_press"),
+            on_release=lambda: events.append("command_release"),
+            match_exact=True,
+        )
+        handler.add_hotkey(
+            "toggle_command_mode",
+            "<ctrl>+<cmd>+<shift>",
+            on_press=lambda: events.append("toggle"),
+            match_exact=True,
+            consume=True,
+        )
+
+        handler._on_press(keyboard.Key.ctrl)
+        handler._on_press(keyboard.Key.cmd)
+        handler._on_press(keyboard.Key.shift)
+        time.sleep(0.15)
+        for key in (keyboard.Key.shift, keyboard.Key.cmd, keyboard.Key.ctrl):
+            handler._on_release(key)
+
+        self.assertEqual(events, ["toggle"])
+        handler.stop()
+
+    def test_plain_command_hotkey_hold_fires_after_delay(self):
+        handler = PTTHandler(
+            {
+                "ptt": {
+                    "hotkey": "<cmd>+<option>",
+                    "press_delay_ms": 80,
+                }
+            }
+        )
+        events = []
+        handler.listener = FakeListener()
+        handler._is_started = True
+        handler.add_hotkey(
+            "window_command_mode",
+            "<ctrl>+<cmd>",
+            on_press=lambda: events.append("command_press"),
+            on_release=lambda: events.append("command_release"),
+            match_exact=True,
+        )
+        handler.add_hotkey(
+            "toggle_command_mode",
+            "<ctrl>+<cmd>+<shift>",
+            on_press=lambda: events.append("toggle"),
+            match_exact=True,
+            consume=True,
+        )
+
+        handler._on_press(keyboard.Key.ctrl)
+        handler._on_press(keyboard.Key.cmd)
+        time.sleep(0.15)
+        handler._on_release(keyboard.Key.cmd)
+        handler._on_release(keyboard.Key.ctrl)
+
+        self.assertEqual(events, ["command_press", "command_release"])
+        handler.stop()
+
+    def test_toggle_command_recording_toggles_on_then_off(self):
+        app = main.Bloviate.__new__(main.Bloviate)
+        app._shutdown_event = threading.Event()
+        app.is_recording = False
+        app.is_command_recording = False
+        app.is_processing_recording = False
+        app.is_processing_command = False
+        app.ui_window = None
+        calls = []
+
+        def fake_press():
+            calls.append("press")
+            app.is_command_recording = True
+
+        def fake_release():
+            calls.append("release")
+            app.is_command_recording = False
+
+        app.on_command_press = fake_press
+        app.on_command_release = fake_release
+
+        app.toggle_command_recording()
+        app.toggle_command_recording()
+
+        self.assertEqual(calls, ["press", "release"])
+
     def test_command_triple_tap_sequence_triggers_callback(self):
         handler = PTTHandler({"ptt": {"hotkey": "<cmd>+<option>"}})
         events = []

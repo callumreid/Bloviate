@@ -1114,6 +1114,7 @@ class Bloviate:
             "mode_cycle_tap_count": self.config.get("ptt", {}).get("mode_cycle_tap_count"),
             "mode_cycle_tap_window_ms": self.config.get("ptt", {}).get("mode_cycle_tap_window_ms"),
             "command_hotkey": self.config.get("window_management", {}).get("command_hotkey"),
+            "command_toggle_hotkey": self.config.get("window_management", {}).get("command_toggle_hotkey"),
             "hotkey_prefix": self.config.get("window_management", {}).get("hotkey_prefix"),
             "voice_command_prefixes": self.config.get("window_management", {}).get("voice_command_prefixes"),
         }
@@ -1134,6 +1135,9 @@ class Bloviate:
                 "mode_cycle_tap_window_ms"
             ]
             self.config.setdefault("window_management", {})["command_hotkey"] = old_config["command_hotkey"]
+            self.config.setdefault("window_management", {})["command_toggle_hotkey"] = old_config[
+                "command_toggle_hotkey"
+            ]
             self.config.setdefault("window_management", {})["hotkey_prefix"] = old_config["hotkey_prefix"]
             self.config.setdefault("window_management", {})["voice_command_prefixes"] = old_config[
                 "voice_command_prefixes"
@@ -1862,6 +1866,24 @@ class Bloviate:
         else:
             print("[PTT] Toggle on")
             self.on_ptt_press()
+
+    def toggle_command_recording(self):
+        """Toggle command-mode recording without requiring the keys to be held."""
+        if (
+            self._shutdown_event.is_set()
+            or self.is_recording
+            or self.is_processing_recording
+            or self.is_processing_command
+        ):
+            if self.ui_window and (self.is_processing_recording or self.is_processing_command):
+                self.ui_window.signals.update_status.emit("Still processing previous clip...")
+            return
+        if self.is_command_recording:
+            print("[Command] Toggle off")
+            self.on_command_release()
+        else:
+            print("[Command] Toggle on")
+            self.on_command_press()
 
     def _process_recording_worker(self, recorded_chunks):
         try:
@@ -2741,6 +2763,21 @@ class Bloviate:
             match_exact=True
         )
 
+        # Toggle variant: a quick tap of the full chord starts/stops command mode.
+        command_toggle_hotkey = str(
+            self.config.get('window_management', {}).get(
+                'command_toggle_hotkey', '<ctrl>+<cmd>+<shift>'
+            ) or ""
+        ).strip()
+        if command_toggle_hotkey:
+            self.ptt_handler.add_hotkey(
+                'toggle_command_mode',
+                command_toggle_hotkey,
+                on_press=self.toggle_command_recording,
+                match_exact=True,
+                consume=True,
+            )
+
         # Add hotkeys for each direction
         self.ptt_handler.add_hotkey(
             'window_left',
@@ -2765,6 +2802,8 @@ class Bloviate:
 
         print(f"Window management enabled with hotkey prefix: {prefix}")
         print(f"Command mode hotkey: {command_hotkey}")
+        if command_toggle_hotkey:
+            print(f"Command toggle hotkey: {command_toggle_hotkey}")
         print("  Ctrl+Cmd+← = Left half")
         print("  Ctrl+Cmd+→ = Right half")
         print("  Ctrl+Cmd+↑ = Top half")

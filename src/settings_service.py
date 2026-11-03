@@ -221,6 +221,8 @@ def _migrate_config(data: dict) -> dict:
         window_config["hotkey_prefix"] = "<ctrl>+<cmd>"
     if not str(window_config.get("command_hotkey", "") or "").strip():
         window_config["command_hotkey"] = "<ctrl>+<cmd>"
+    # setdefault (not blank-fill): an explicit empty string disables the toggle.
+    window_config.setdefault("command_toggle_hotkey", "<ctrl>+<cmd>+<shift>")
     prefixes = window_config.get("voice_command_prefixes")
     if not isinstance(prefixes, list) or not [p for p in prefixes if str(p).strip()]:
         window_config["voice_command_prefixes"] = ["run command", "screen", "window", "desktop"]

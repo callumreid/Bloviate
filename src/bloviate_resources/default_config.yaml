@@ -38,6 +38,7 @@ window_management:
   enabled: true
   hotkey_prefix: "<ctrl>+<cmd>"  # Base hotkey, combine with arrow keys
   command_hotkey: "<ctrl>+<cmd>"  # Hold to speak window commands
+  command_toggle_hotkey: "<ctrl>+<cmd>+<shift>"  # Tap to toggle command mode on/off (empty disables)
   voice_command_prefixes:
     - "run command"
     - "screen"

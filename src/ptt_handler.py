@@ -29,6 +29,7 @@ class PTTHandler:
         self._poll_interval_s = max(0.01, float(ptt_config.get("modifier_poll_interval_ms", 20)) / 1000.0)
         self._flag_reader = None
         self._press_timer: Optional[threading.Timer] = None
+        self._hotkey_press_timers: Dict[str, threading.Timer] = {}
         self.press_delay_s = max(0.0, float(ptt_config.get("press_delay_ms", 90)) / 1000.0)
 
         # Callbacks for PTT hotkey
@@ -210,6 +211,31 @@ class PTTHandler:
             if self.on_press_callback:
                 self.on_press_callback()
 
+    def _cancel_pending_hotkey_timers(self, name: Optional[str] = None):
+        names = [name] if name else list(self._hotkey_press_timers)
+        for hotkey_name in names:
+            timer = self._hotkey_press_timers.pop(hotkey_name, None)
+            if timer:
+                timer.cancel()
+
+    def _activate_hotkey_if_still_matching(self, name: str):
+        self._hotkey_press_timers.pop(name, None)
+        hotkey_info = self.additional_hotkeys.get(name)
+        if (
+            not hotkey_info
+            or hotkey_info['is_active']
+            or not self._is_started
+            or not self._matches_hotkey(
+                hotkey_info['hotkey'],
+                exact=hotkey_info.get('match_exact', False),
+            )
+        ):
+            return
+        hotkey_info['is_active'] = True
+        self.active_hotkeys.add(name)
+        if hotkey_info['on_press']:
+            hotkey_info['on_press']()
+
     def add_hotkey(
         self,
         name: str,
@@ -312,6 +338,23 @@ class PTTHandler:
                 hotkey_info['hotkey'],
                 exact=hotkey_info.get('match_exact', False)
             ) and not hotkey_info['is_active']:
+                if (
+                    not hotkey_info.get('consume', False)
+                    and self.press_delay_s > 0
+                    and self._has_pending_consuming_extension()
+                ):
+                    # Modifiers arrive one at a time; a shorter non-consuming
+                    # hotkey may just be a prefix of a consuming chord.
+                    if name not in self._hotkey_press_timers:
+                        timer = threading.Timer(
+                            self.press_delay_s,
+                            self._activate_hotkey_if_still_matching,
+                            args=(name,),
+                        )
+                        timer.daemon = True
+                        timer.start()
+                        self._hotkey_press_timers[name] = timer
+                    continue
                 hotkey_info['is_active'] = True
                 self.active_hotkeys.add(name)
                 if hotkey_info['on_press']:
@@ -320,6 +363,7 @@ class PTTHandler:
 
         if consumed:
             self._cancel_pending_ptt()
+            self._cancel_pending_hotkey_timers()
             return
 
         # Check main PTT hotkey
@@ -344,6 +388,14 @@ class PTTHandler:
 
         if self._press_timer and not self._matches_any_ptt_hotkey():
             self._cancel_pending_ptt()
+
+        for name in list(self._hotkey_press_timers):
+            hotkey_info = self.additional_hotkeys.get(name)
+            if hotkey_info is None or not self._matches_hotkey(
+                hotkey_info['hotkey'],
+                exact=hotkey_info.get('match_exact', False),
+            ):
+                self._cancel_pending_hotkey_timers(name)
 
         # Check if main PTT hotkey is no longer active
         if self.is_active and not self._matches_any_ptt_hotkey():
@@ -486,6 +538,7 @@ class PTTHandler:
 
         self.is_active = False
         self._cancel_pending_ptt()
+        self._cancel_pending_hotkey_timers()
         self.current_keys.clear()
         self.active_hotkeys.clear()
         for hotkey_info in self.additional_hotkeys.values():
