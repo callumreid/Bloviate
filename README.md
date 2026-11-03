@@ -294,6 +294,37 @@ venv/bin/python eval/train_whisper_lora_mlx.py --epochs 2 --batch-size 4 --rank 
 
 Then point `transcription.mlx_model` in `~/Library/Application Support/Bloviate/config.yaml` at the exported checkpoint directory and put `whisper` first in `final_pass_provider_priority`.
 
+### Round 3 experiment: long-form windows (not deployed)
+
+Real dictations are mostly long (30 s+ clips are ~68% of recorded audio time), but every training clip is 3–11 s. Round 3 added 600 packed 2–6 clip windows (≤29 s) with 50% timestamp targets. `eval/eval_longform.py` builds ~50 s passages from the non-templated held-out clips (only 3 passages, ~400 words, so treat as directional):
+
+| WER | Round 2 (live) | Round 3 |
+| :--- | :---: | :---: |
+| long-form, clean | 0.110 | 0.082 |
+| long-form, LPC-unvoiced | 0.135 | 0.096 |
+| long-form, 14 dB office | 0.166 | 0.149 |
+| per-clip, clean (50 clips) | 0.050 | 0.059 |
+
+Long-form improved, but short clips regressed, and the checkpoint was chosen by a dev metric that double-applied noise (since fixed). Packed windows now never repeat a sentence template (`--packed-distinct-categories`), and packing is off by default. Re-run as round 3b with `--packed-windows 600 --timestamp-prob 0.5`. Splitting long audio at silences was also tested and did not help on natural passages.
+
+### Training Data Capture
+
+Bloviate can optionally save your real dictations as local audio + metadata so you can build a fine-tuning dataset from your actual whispered speech (the synthetic training set is 3–11s clips; real dictations are often 30s+). Enable it in `~/Library/Application Support/Bloviate/config.yaml`:
+
+```yaml
+training_capture:
+  enabled: true
+  max_hours: 20            # prune oldest audio beyond this many hours of total duration
+  correction_hotkey: "<ctrl>+<option>+<cmd>"  # tap after fixing a pasted dictation
+  correction_window_min: 30
+```
+
+When enabled, every accepted dictation (one that produced text and was not a voice command) is saved as 16-bit PCM WAV under `~/Library/Application Support/Bloviate/training_capture/audio/YYYY-MM-DD/<id>.wav`, with one JSON line per capture appended to `captures.jsonl` (capture id, history id, duration, sample rate, audio device, raw RMS, provider, raw transcript, post-processed/pasted text, streaming text, target app, outcome). Audio older than `max_hours` is pruned automatically.
+
+To record a **gold correction**: fix the pasted text in the target app, select the whole corrected passage, and tap the correction hotkey. Bloviate saves your clipboard, simulates ⌘C, reads the selection, restores the clipboard, and matches it against the most similar capture from the last `correction_window_min` minutes (difflib ratio ≥ 0.5, selection at least 60% of the original length). A match appends to `corrections.jsonl` (capture id, corrected text, similarity, timestamp); an exact match is saved too as a confirmation label. If nothing matches, the status bar says so and nothing is written.
+
+Everything stays local — no audio or text leaves your machine. Disable by setting `enabled: false` (or emptying the correction hotkey to turn off just the shortcut).
+
 ## Development
 
 ```bash

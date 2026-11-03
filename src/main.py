@@ -90,6 +90,7 @@ from personal_dictionary import (
 )
 from achievement_service import AchievementService
 from history_store import HistoryStore
+from training_capture import TrainingCapture
 from macos_permissions import (
     accessibility_trusted,
     open_privacy_pane,
@@ -725,6 +726,7 @@ class Bloviate:
         self.secret_store = SecretStore()
         self.model_registry = ModelRegistry()
         self.history_store = HistoryStore()
+        self.training_capture = TrainingCapture(self.config)
         self.achievement_service = AchievementService(
             self.config,
             secret_store=self.secret_store,
@@ -1157,6 +1159,7 @@ class Bloviate:
         self.ptt_handler = candidate
         self._setup_toggle_hotkey()
         self._setup_mode_cycle_tap()
+        self._setup_training_capture_hotkey()
         if listener_was_running:
             self.ptt_handler.start(
                 on_press=self.on_ptt_press,
@@ -2356,6 +2359,128 @@ class Bloviate:
             print(f"[History] Could not record transcript: {exc}")
             return None
 
+    def _capture_training_sample(self, **kwargs) -> None:
+        """Persist a training capture in a background thread; never blocks the paste."""
+        capture = getattr(self, "training_capture", None)
+        if capture is None or not capture.enabled:
+            return
+
+        def _do_record():
+            capture.record(**kwargs)
+
+        worker = self._start_worker(_do_record)
+        if worker is None:
+            # Fall back to a plain thread if the worker pool is unavailable.
+            thread = threading.Thread(target=_do_record, daemon=True)
+            thread.start()
+
+    def _read_clipboard_text(self) -> Optional[str]:
+        """Best-effort read of the macOS system clipboard as text."""
+        try:
+            result = subprocess.run(
+                ["pbpaste"], capture_output=True, text=True, timeout=0.5
+            )
+            if result.returncode == 0:
+                return result.stdout
+        except Exception as exc:
+            print(f"[Correction] Could not read clipboard: {exc}")
+        return None
+
+    def _write_clipboard_text(self, text: str) -> bool:
+        try:
+            proc = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE, close_fds=True)
+            proc.communicate(text.encode("utf-8"))
+            return True
+        except Exception as exc:
+            print(f"[Correction] Could not write clipboard: {exc}")
+            return False
+
+    def _simulate_copy(self) -> bool:
+        """Simulate Cmd+C via CoreGraphics, mirroring the auto-paste mechanism."""
+        try:
+            import ctypes
+            app_services_path = ctypes.util.find_library("ApplicationServices")
+            core_foundation_path = ctypes.util.find_library("CoreFoundation")
+            if not app_services_path or not core_foundation_path:
+                return False
+            from macos_permissions import accessibility_trusted
+            if not accessibility_trusted():
+                print("[Correction] Accessibility permission required to simulate Cmd+C")
+                return False
+            app_services = ctypes.cdll.LoadLibrary(app_services_path)
+            core_foundation = ctypes.cdll.LoadLibrary(core_foundation_path)
+            create_event = app_services.CGEventCreateKeyboardEvent
+            create_event.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
+            create_event.restype = ctypes.c_void_p
+            set_flags = app_services.CGEventSetFlags
+            set_flags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+            set_flags.restype = None
+            post_event = app_services.CGEventPost
+            post_event.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+            post_event.restype = None
+            release = core_foundation.CFRelease
+            release.argtypes = [ctypes.c_void_p]
+            release.restype = None
+            k_cg_hid_event_tap = 0
+            k_vk_ansi_c = 8
+            k_vk_command = 55
+            command_flag = 0x00100000
+            for keycode, is_down, flags in (
+                (k_vk_command, True, command_flag),
+                (k_vk_ansi_c, True, command_flag),
+                (k_vk_ansi_c, False, command_flag),
+                (k_vk_command, False, 0),
+            ):
+                event = create_event(None, keycode, is_down)
+                if not event:
+                    return False
+                try:
+                    set_flags(event, flags)
+                    post_event(k_cg_hid_event_tap, event)
+                finally:
+                    release(event)
+                time.sleep(0.012)
+            return True
+        except Exception as exc:
+            print(f"[Correction] Could not simulate Cmd+C: {exc}")
+            return False
+
+    def handle_correction_hotkey(self):
+        """User fixed a pasted dictation, selected it, and tapped the hotkey."""
+        capture = getattr(self, "training_capture", None)
+        if capture is None or not capture.enabled:
+            return
+        old_clipboard = self._read_clipboard_text()
+        if not self._simulate_copy():
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit(
+                    "Correction needs Accessibility permission"
+                )
+            return
+        time.sleep(0.15)
+        selected = self._read_clipboard_text() or ""
+        if old_clipboard is not None:
+            self._write_clipboard_text(old_clipboard)
+        selected = selected.strip()
+        if not selected:
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit(
+                    "No matching dictation — select the whole corrected text"
+                )
+            return
+        match = capture.match_correction(selected)
+        if match is None:
+            if self.ui_window:
+                self.ui_window.signals.update_status.emit(
+                    "No matching dictation — select the whole corrected text"
+                )
+            return
+        entry, similarity = match
+        capture.save_correction(entry["capture_id"], selected, similarity)
+        print(f"[Correction] Saved correction for {entry['capture_id']} (similarity={similarity:.3f})")
+        if self.ui_window:
+            self.ui_window.signals.update_status.emit("Correction saved")
+
     def _transcribe_dictation_audio(self, audio_for_transcription: np.ndarray, stream_text: Optional[str]):
         """Return final dictation text/provider for accepted or rejected voice clips."""
         transcription_cfg = self.config.get("transcription", {})
@@ -2710,7 +2835,7 @@ class Bloviate:
                 paste_result = "paste_failed"
             else:
                 paste_result = "copied"
-            self._record_history(
+            history_id = self._record_history(
                 text=output_text,
                 original_text=processed.original_text,
                 mode="dictation",
@@ -2736,6 +2861,21 @@ class Bloviate:
                     self.ui_window.signals.update_status.emit("Auto-paste blocked by macOS permissions")
                 else:
                     self.ui_window.signals.update_status.emit("Ready")
+
+            # Opt-in training capture: save raw audio + transcript in the
+            # background so the paste path is never blocked.
+            self._capture_training_sample(
+                raw_audio=raw_audio,
+                history_id=history_id,
+                audio_device=self.audio_capture.get_active_device_label(),
+                raw_rms=raw_speech['rms'],
+                provider=provider_used,
+                transcript=text,
+                output_text=output_text,
+                stream_text=stream_text,
+                target_app=context.get("target_app", ""),
+                outcome=paste_result,
+            )
         else:
             print("✗ No transcription generated")
             if self.ui_window:
@@ -2808,6 +2948,27 @@ class Bloviate:
         print("  Ctrl+Cmd+→ = Right half")
         print("  Ctrl+Cmd+↑ = Top half")
         print("  Ctrl+Cmd+↓ = Bottom half")
+
+    def _setup_training_capture_hotkey(self):
+        """Register the opt-in correction hotkey when training capture is enabled."""
+        capture = getattr(self, "training_capture", None)
+        if capture is None or not capture.enabled:
+            return
+        hotkey = str(
+            self.config.get("training_capture", {}).get(
+                "correction_hotkey", "<ctrl>+<option>+<cmd>"
+            ) or ""
+        ).strip()
+        if not hotkey:
+            return
+        self.ptt_handler.add_hotkey(
+            "training_correction",
+            hotkey,
+            on_press=lambda: self._start_worker(self.handle_correction_hotkey),
+            match_exact=True,
+            consume=True,
+        )
+        print(f"Training capture enabled; correction hotkey: {hotkey}")
 
     def audio_callback(self, audio_data: np.ndarray):
         """Called for each audio chunk."""
@@ -2964,6 +3125,7 @@ class Bloviate:
         # Start PTT handler
         self._setup_toggle_hotkey()
         self._setup_mode_cycle_tap()
+        self._setup_training_capture_hotkey()
         try:
             self.ptt_handler.start(
                 on_press=self.on_ptt_press,
